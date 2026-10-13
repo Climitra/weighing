@@ -59,6 +59,12 @@
   .title { font-size: 1.9rem; margin: 4px 0 2px; color: var(--c, var(--ink)); }
   .sub { color: var(--muted); margin: 0 0 16px; }
 
+  .testrow { display: flex; gap: 8px; align-items: stretch; }
+  .testrow .testbtn { flex: 1; min-width: 0; }
+  .resetbtn { flex: 0 0 76px; border: 1px solid #e3b4b0; border-radius: 14px; background: #fff6f5; color: var(--err);
+              font-weight: 700; font-size: .85rem; line-height: 1.2; padding: 8px 4px; }
+  .resetbtn span { display: block; font-size: 1.4rem; line-height: 1; margin-bottom: 4px; }
+  .danger { background: var(--err) !important; }
   .testbtn { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-left: 10px solid var(--c); border-radius: 14px; padding: 18px 16px; }
   .testbtn .name { font-weight: 700; font-size: 1.15rem; }
   .testbtn .state { color: var(--muted); font-size: .95rem; margin-top: 2px; }
@@ -290,6 +296,18 @@ const L = {
 };
 L.en.install = 'Install app'; L.gu.install = 'એપ ઇન્સ્ટોલ કરો';
 L.en.installed = 'App installed. Open it from the home screen.'; L.gu.installed = 'એપ ઇન્સ્ટોલ થઈ ગઈ. હોમ સ્ક્રીન પરથી ખોલો.';
+Object.assign(L.en, {
+  reset: 'Reset',
+  resetQ: (c, l) => `Reset ${l} for ${c}?`,
+  resetInfo: 'This clears W1, W2 and W3 and the result for this test only. The worker then starts this test again from step 1.',
+  cancel: 'Cancel', yesReset: 'Yes, reset', resetDone: (c, l) => `${c} ${l} reset. Start again from step 1.`
+});
+Object.assign(L.gu, {
+  reset: 'રીસેટ',
+  resetQ: (c, l) => `${c} નું ${l} રીસેટ કરવું છે?`,
+  resetInfo: 'આ ફક્ત આ ટેસ્ટના W1, W2, W3 અને પરિણામ ભૂંસી નાખશે. પછી આ ટેસ્ટ પગલું 1 થી ફરી શરૂ કરવાનો.',
+  cancel: 'રદ કરો', yesReset: 'હા, રીસેટ કરો', resetDone: (c, l) => `${c} ${l} રીસેટ થયું. પગલું 1 થી ફરી શરૂ કરો.`
+});
 Object.assign(L.en, { noCodes: 'No sample codes yet. The supervisor adds them with ⚙ Setup.' });
 Object.assign(L.gu, { noCodes: 'હજી કોઈ સેમ્પલ કોડ નથી. સુપરવાઇઝર ⚙ સેટઅપમાંથી ઉમેરશે.' });
 Object.assign(L.en, {
@@ -394,6 +412,10 @@ function fileApply(f, j) {
     fileSample(f, j.code).tm = !!j.value;
   } else if (j.action === 'addCodes') {
     j.codes.forEach(c => fileSample(f, c));
+  } else if (j.action === 'resetTest') {
+    const s = fileSample(f, j.code);
+    s.w[j.key] = [null, null, null]; delete s.pct[j.key];
+    s.last = `${j.worker || 'Unknown'} | ${TESTS[j.key].label} reset | ${stamp(j.at)}`;
   } else if (j.action === 'removeCode') {
     const s = f.samples[j.code];
     if (s && !ORDER.some(k => s.w[k].some(v => v !== null) || s.pct[k] != null)) {
@@ -458,6 +480,8 @@ function enqueue(job) {
   job.id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
   job.at = Date.now();
   // a newer value for the same cell replaces an unsent older one
+  if (job.action === 'resetTest')
+    Q = Q.filter(j => !(j.action === 'saveWeight' && j.code === job.code && j.key === job.key));
   if (job.action === 'saveWeight' || job.action === 'setTmRequired')
     Q = Q.filter(j => !(j.action === job.action && j.code === job.code && j.key === job.key && j.step === job.step));
   Q.push(job); saveQ();
@@ -467,6 +491,7 @@ function enqueue(job) {
 function commitMessage(batch) {
   const first = batch[0];
   const what = first.action === 'saveWeight' ? `${first.code} ${TESTS[first.key].label} W${first.step}`
+             : first.action === 'resetTest' ? `${first.code} ${TESTS[first.key].label} reset`
              : first.action === 'addCodes' ? `add ${first.codes.length} code(s)`
              : first.action === 'importRows' ? `import ${first.rows.length} row(s)` : `${first.action} ${first.code || ''}`;
   return `${what}${batch.length > 1 ? ` (+${batch.length - 1} more)` : ''} by ${first.worker || S.worker || 'app'}`;
@@ -631,11 +656,15 @@ function stateText(k, st) {
   return p ? t.doneP(p) : t.done;
 }
 
+function hasValues(st) { return st.w.some(isNum) || isNum(st.pct); }
 function testBtn(s, k) {
   const st = s.tests[k];
-  return `<button class="testbtn ${st.done === 3 ? 'done' : ''}" style="${cvar(k)}" data-act="open-test" data-test="${k}">
+  const card = `<button class="testbtn ${st.done === 3 ? 'done' : ''}" style="${cvar(k)}" data-act="open-test" data-test="${k}">
     <div class="name">${esc(lbl(k))}</div>
     <div class="state">${esc(stateText(k, st))}</div></button>`;
+  if (!hasValues(st)) return card;
+  return `<div class="testrow">${card}
+    <button class="resetbtn" data-act="ask-reset" data-test="${k}" aria-label="${esc(T().reset)} ${esc(lbl(k))}"><span>↺</span>${esc(T().reset)}</button></div>`;
 }
 
 function renderSample() {
@@ -718,6 +747,7 @@ function renderReview() {
     <div class="prev">${st.w.map((w, i) => `
       <div class="row"><span>${esc(wLabel(k, i))} (W${i + 1})<br><b>${fmt(w)} g</b></span>
       <button class="link" data-act="edit" data-step="${i + 1}">${esc(t.correct)}</button></div>`).join('')}</div>
+    <button class="secondary" data-act="ask-reset" data-test="${k}" style="width:100%;margin-top:16px;color:var(--err)">↺ ${esc(t.reset)} ${esc(lbl(k))}</button>
   </div>`;
 }
 
@@ -858,6 +888,13 @@ function renderModal() {
   const m = S.modal;
   if (!m) return '';
   const t = T(), k = S.test;
+  if (m.type === 'reset') return `<div class="modal" style="${cvar(m.key)}"><div class="sheet" role="dialog" aria-modal="true">
+      <p class="instr">${esc(t.resetQ(S.code, lbl(m.key)))}</p>
+      <p class="sub">${esc(t.resetInfo)}</p>
+      <div class="btnrow">
+        <button class="secondary" data-act="cancel">${esc(t.cancel)}</button>
+        <button class="primary danger" data-act="do-reset">${esc(t.yesReset)}</button>
+      </div></div></div>`;
   if (m.type === 'confirm') return `<div class="modal" style="${cvar(k)}"><div class="sheet" role="dialog" aria-modal="true">
       <p class="sub" style="margin:0">${esc(S.code)}, ${esc(lbl(k))}, W${S.step}: ${esc(wLabel(k, S.step - 1))}</p>
       <div class="big">${esc(m.raw)} g</div>
@@ -1050,6 +1087,14 @@ document.addEventListener('click', e => {
     }
     case 'save': askConfirm(); break;
     case 'cancel': S.modal = null; render(); break;
+    case 'ask-reset': S.modal = { type: 'reset', key: el.dataset.test }; render(); break;
+    case 'do-reset': {
+      const key = S.modal.key; S.modal = null;
+      enqueue({ action: 'resetTest', code: S.code, key, worker: S.worker });
+      S.view = 'sample'; render();
+      toast(T().resetDone(S.code, lbl(key)), true);
+      break;
+    }
     case 'confirm': doSave(); break;
     case 'after': {
       const next = S.modal.next; S.modal = null;

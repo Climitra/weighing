@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab timeline</title>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eef2f4; --surface: #ffffff; --ink: #1f2a33; --ink2: #4a5964; --muted: #6b7a85; --line: #d3dbe0; --grid: #e9eef1;
+    --now: #c0392b; --weigh: #b9c4cc;
+    --MC: #a8426b; --VM: #3c7a2a; --ASH: #574a9c; --TM: #b0432d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12191e; --surface: #1b242b; --ink: #e6edf1; --ink2: #b6c3cc; --muted: #8a9aa5; --line: #2e3a43; --grid: #243038;
+      --now: #ff6b5b; --weigh: #4a5862;
+      --MC: #e07aa0; --VM: #79bb63; --ASH: #a497e6; --TM: #ee8466;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid #2b6cb0; outline-offset: 2px; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 14px; }
+  h1 { font-size: 1.45rem; margin: 0; }
+  .meta { color: var(--muted); font-size: .9rem; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .seg button { border: 0; background: none; padding: 6px 12px; border-radius: 7px; cursor: pointer; color: var(--ink2); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 700; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface);
+          border-radius: 999px; padding: 5px 12px; cursor: pointer; color: var(--ink2); }
+  .chip i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+  .chip[aria-pressed="false"] { opacity: .45; }
+  .chip[aria-pressed="false"] i { background: transparent; border: 2px solid var(--c); }
+  select, .btn { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .tile b { display: block; font-size: 1.7rem; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: .88rem; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 0 8px; margin-bottom: 14px; }
+  .card h2 { font-size: 1rem; margin: 0 16px 2px; }
+  .card .sub { color: var(--muted); font-size: .86rem; margin: 0 16px 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 16px 8px; font-size: .86rem; color: var(--ink2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { display: inline-block; width: 22px; height: 10px; border-radius: 3px; }
+  .scroll { overflow-x: auto; }
+  svg { display: block; }
+  svg text { fill: var(--ink2); font-size: 12px; font-family: inherit; }
+  svg .axis text { fill: var(--muted); font-size: 11px; }
+  svg .grp { fill: var(--ink); font-weight: 700; font-size: 12px; }
+  .hit { cursor: pointer; }
+  .hit:hover rect.heat, .hit:focus rect.heat { filter: brightness(1.08); }
+  .hit:focus { outline: none; }
+  .hit:focus rect.hl { stroke: var(--ink); stroke-width: 2; }
+
+  #tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface); color: var(--ink);
+         border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+         padding: 10px 12px; font-size: .86rem; min-width: 230px; max-width: 300px; }
+  #tip h3 { margin: 0 0 6px; font-size: .95rem; display: flex; align-items: center; gap: 6px; }
+  #tip table { border-collapse: collapse; width: 100%; }
+  #tip td { padding: 2px 0; vertical-align: top; }
+  #tip td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
+  #tip .dur { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink2); }
+
+  table.list { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  table.list th, table.list td { text-align: left; padding: 7px 16px; border-top: 1px solid var(--line); white-space: nowrap; }
+  table.list th { color: var(--muted); font-weight: 400; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
+  .keybox { max-width: 520px; margin: 40px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .keybox input { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin: 10px 0; background: var(--bg); }
+</style>
+</head>
+<body>
+<div class="wrap" id="root"><div class="empty">Loading…</div></div>
+<div id="tip" hidden></div>
+
+<script>
+/* Same private data repository as the weighing app */
+const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'timestamps.json', branch: 'main' };
+// Moisture and Total Moisture dry in the oven; VM and Ash burn in the furnace
+const TESTS = [
+  { key: 'Moisture',       short: 'Moisture', color: 'var(--MC)',  eq: 'Oven' },
+  { key: 'Total Moisture', short: 'Total M.', color: 'var(--TM)',  eq: 'Oven' },
+  { key: 'VM',             short: 'VM',       color: 'var(--VM)',  eq: 'Furnace' },
+  { key: 'Ash',            short: 'Ash',      color: 'var(--ASH)', eq: 'Furnace' }
+];
+const EQUIP = ['Oven', 'Furnace'];
+
+const store = { get: k => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+let KEY = store.get('ghkey');                      // shared with the app on the same phone / computer
+(function keyFromLink() {
+  const m = location.hash.match(/key=([^&]+)/);
+  if (m) { KEY = decodeURIComponent(m[1]).trim(); store.set('ghkey', KEY); history.replaceState(null, '', location.pathname); }
+})();
+
+const V = { range: store.get('dash-range') || 'today', group: store.get('dash-group') || 'equip', hidden: new Set(), view: 'chart' };
+let RAW = null, LOADED = 0, ERR = null;
+const root = document.getElementById('root'), tip = document.getElementById('tip');
+
+/* ---------- data ---------- */
+async function fetchLog() {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}?ref=${GH.branch}`;
+  const res = await fetch(url, { cache: 'no-store', headers: { Authorization: 'Bearer ' + KEY, Accept: 'application/vnd.github.raw+json' } });
+  if (res.status === 404) return {};
+  if (res.status === 401 || res.status === 403) throw new Error('The storage key was not accepted.');
+  if (!res.ok) throw new Error('GitHub error ' + res.status);
+  return res.json();
+}
+async function load() {
+  if (!KEY) { renderKey(); return; }
+  try { RAW = await fetchLog(); ERR = null; LOADED = Date.now(); }
+  catch (e) { ERR = e.message === 'Failed to fetch' ? 'No internet connection.' : e.message; }
+  render();
+}
+// One job = one sample + one test. Weighing = W1→W2, heating = W2→W3 (still running if no W3).
+function jobs() {
+  const out = [];
+  Object.entries(RAW || {}).forEach(([code, tests]) => {
+    TESTS.forEach(t => {
+      const w = tests[t.key]; if (!w) return;
+      const p = n => w[n] ? { t: Date.parse(w[n].at), by: w[n].by } : null;
+      const j = { code, test: t, w1: p('W1'), w2: p('W2'), w3: p('W3') };
+      if (!j.w1 && !j.w2 && !j.w3) return;
+      j.start = (j.w1 || j.w2 || j.w3).t;
+      j.end = j.w3 ? j.w3.t : (j.w2 ? Date.now() : (j.w1 || j.w2).t);
+      j.running = !!j.w2 && !j.w3;
+      out.push(j);
+    });
+  });
+  return out;
+}
+function rangeBounds() {
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  const day = 864e5, now = Date.now();
+  if (V.range === 'today') return [d0.getTime(), d0.getTime() + day];
+  if (V.range === 'yesterday') return [d0.getTime() - day, d0.getTime()];
+  if (V.range === '7d') return [d0.getTime() - 6 * day, d0.getTime() + day];
+  return [-Infinity, Infinity];
+}
+
+/* ---------- helpers ---------- */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const p2 = n => String(n).padStart(2, '0');
+const hm = t => { const d = new Date(t); return `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const dayLabel = t => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+const when = t => { const d = new Date(t), today = new Date(); return (d.toDateString() === today.toDateString() ? '' : dayLabel(t) + ' ') + hm(t); };
+const dur = ms => { if (!(ms >= 0)) return '–'; const m = Math.round(ms / 6e4); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${p2(m % 60)} min`; };
+const median = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const codeNum = c => +((c.match(/\d+/) || [0])[0]);
+
+/* ---------- render ---------- */
+function renderKey(msg) {
+  root.innerHTML = `<div class="keybox"><h1>Lab timeline</h1>
+    <p>${esc(msg || 'This device is not connected to the lab data yet. Paste the same GitHub key used for the weighing app.')}</p>
+    <input id="key" type="password" placeholder="github_pat_…" autocomplete="off">
+    <button class="btn" id="savekey">Connect</button></div>`;
+  document.getElementById('savekey').onclick = () => {
+    const v = document.getElementById('key').value.trim(); if (!v) return;
+    KEY = v; store.set('ghkey', v); root.innerHTML = '<div class="empty">Loading…</div>'; load();
+  };
+}
+
+function render() {
+  if (ERR && !RAW) { if (/key/.test(ERR)) renderKey(ERR); else root.innerHTML = `<div class="empty">${esc(ERR)} <button class="btn" onclick="load()">Try again</button></div>`; return; }
+  const [a, b] = rangeBounds(), now = Date.now();
+  const all = jobs().filter(j => !V.hidden.has(j.test.key));
+  // a job belongs to the range if any part of it touches the range
+  const list = all.filter(j => j.end >= a && j.start < b);
+
+  const running = list.filter(j => j.running);
+  const done = list.filter(j => j.w2 && j.w3);
+  const heat = k => median(done.filter(j => j.test.key === k).map(j => j.w3.t - j.w2.t));
+  const peak = eq => {                     // most jobs heating at once in this equipment
+    const ev = [];
+    list.filter(j => j.w2 && j.test.eq === eq).forEach(j => { ev.push([j.w2.t, 1]); ev.push([j.w3 ? j.w3.t : now, -1]); });
+    ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]); let c = 0, m = 0; ev.forEach(e => { c += e[1]; m = Math.max(m, c); }); return m;
+  };
+
+  const rangeBtn = (v, l) => `<button data-range="${v}" aria-pressed="${V.range === v}">${l}</button>`;
+  root.innerHTML = `
+    <header><h1>Lab timeline</h1>
+      <span class="meta">${ERR ? '⚠ ' + esc(ERR) + ' · showing last data · ' : ''}Updated ${LOADED ? hm(LOADED) : '–'} · refreshes every minute
+        <button class="btn" id="refresh" style="margin-left:6px">↻</button></span></header>
+    <div class="filters">
+      <div class="seg" role="group" aria-label="Time range">${rangeBtn('today', 'Today')}${rangeBtn('yesterday', 'Yesterday')}${rangeBtn('7d', 'Last 7 days')}${rangeBtn('all', 'All')}</div>
+      ${TESTS.map(t => `<button class="chip" data-test="${esc(t.key)}" aria-pressed="${!V.hidden.has(t.key)}" style="--c:${t.color}"><i></i>${esc(t.key)}</button>`).join('')}
+      <select id="group" aria-label="Group rows"><option value="equip"${V.group === 'equip' ? ' selected' : ''}>Group by oven / furnace</option>
+        <option value="sample"${V.group === 'sample' ? ' selected' : ''}>Group by sample</option></select>
+      <div class="seg" role="group" aria-label="View"><button data-view="chart" aria-pressed="${V.view === 'chart'}">Chart</button><button data-view="table" aria-pressed="${V.view === 'table'}">Table</button></div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><b>${running.filter(j => j.test.eq === 'Oven').length}</b><span>in the oven now</span></div>
+      <div class="tile"><b>${running.filter(j => j.test.eq === 'Furnace').length}</b><span>in the furnace now</span></div>
+      <div class="tile"><b>${done.length}</b><span>tests finished in this range</span></div>
+      <div class="tile"><b>${peak('Oven')} / ${peak('Furnace')}</b><span>most at once: oven / furnace</span></div>
+      ${TESTS.filter(t => !V.hidden.has(t.key) && heat(t.key) != null).map(t =>
+        `<div class="tile"><b>${dur(heat(t.key))}</b><span>typical ${esc(t.key)} time in ${t.eq.toLowerCase()} (W2→W3)</span></div>`).join('')}
+    </div>
+    ${!list.length ? `<div class="card"><div class="empty">No weighing in this time range${RAW && !Object.keys(RAW).length ? ' yet. Timestamps start from the first weight saved after the app update' : ''}.</div></div>`
+      : V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)}`;
+  wire();
+}
+
+function chartHTML(list, a, b, now) {
+  // time window: the chosen range, trimmed to the data so the bars aren't squeezed
+  let t0 = Math.min(...list.map(j => j.start)), t1 = Math.max(...list.map(j => j.end), list.some(j => j.running) ? now : 0);
+  if (isFinite(a)) { t0 = Math.max(t0, a); t1 = Math.min(Math.max(t1, t0 + 36e5), b); }
+  const span = Math.max(t1 - t0, 36e5), pad = span * 0.03; t0 -= pad; t1 += pad;
+
+  // rows
+  const sorted = list.slice().sort((x, y) => (x.w2 ? x.w2.t : x.start) - (y.w2 ? y.w2.t : y.start));
+  const groups = V.group === 'equip'
+    ? EQUIP.map(e => ({ name: e === 'Oven' ? 'Oven: Moisture, Total Moisture' : 'Furnace: VM, Ash', eq: e, rows: sorted.filter(j => j.test.eq === e) }))
+    : [...new Set(list.map(j => j.code))].sort((x, y) => codeNum(x) - codeNum(y) || x.localeCompare(y))
+        .map(c => ({ name: c, rows: TESTS.map(t => list.find(j => j.code === c && j.test.key === t.key)).filter(Boolean) }));
+
+  const LW = 128, RH = 26, GH_ = 28, AX = 30, LOAD = 46;
+  const W = Math.max(760, (document.querySelector('.wrap').clientWidth || 1000) - 2);
+  const RP = 128;                                   // room on the right for "running …" labels
+  const plotW = W - LW - RP;
+  const x = t => LW + (t - t0) / (t1 - t0) * plotW;
+  const nRows = groups.reduce((n, g) => n + (g.rows.length ? g.rows.length : 0), 0);
+  const nGroups = groups.filter(g => g.rows.length).length;
+  const H = AX + (V.group === 'equip' ? EQUIP.length * (LOAD + 8) + 10 : 0) + nGroups * GH_ + nRows * RH + 10;
+
+  // hour ticks
+  const stepH = [1, 2, 3, 6, 12, 24].find(h => span / (h * 36e5) <= 12) || 24;
+  const ticks = []; const s = new Date(t0); s.setMinutes(0, 0, 0);
+  for (let t = s.getTime(); t <= t1; t += 36e5) { const d = new Date(t); if (d.getHours() % stepH === 0 && t >= t0) ticks.push(t); }
+  const tickLbl = t => { const d = new Date(t); return d.getHours() === 0 || stepH >= 24 ? dayLabel(t) : hm(t); };
+
+  let y = AX, g = '';
+  // concurrency strips: how many tests are heating at the same time (one per equipment, same scale)
+  if (V.group === 'equip') {
+    const maxC = Math.max(1, ...EQUIP.map(e => stepsFor(list, e, t0, t1, now).max));
+    g += `<text x="${LW - 8}" y="${y - 10}" text-anchor="end" class="grp">Heating at once</text>`;
+    EQUIP.forEach(e => {
+      const st = stepsFor(list, e, t0, t1, now), h = LOAD - 14;
+      let d = `M${x(t0)},${y + h}`;
+      st.pts.forEach(([t, c], i) => { const nx = i + 1 < st.pts.length ? st.pts[i + 1][0] : t1; d += ` L${x(t)},${y + h - c / maxC * h} L${x(nx)},${y + h - c / maxC * h}`; });
+      d += ` L${x(t1)},${y + h} Z`;
+      g += `<text x="${LW - 8}" y="${y + h / 2 + 4}" text-anchor="end">${e} (max ${st.max})</text>
+            <rect x="${LW}" y="${y}" width="${plotW}" height="${h}" fill="var(--grid)" opacity=".5" rx="3"/>
+            <path d="${d}" fill="var(--ink2)" opacity=".35"/>`;
+      y += LOAD + 8;
+    });
+    y += 10;
+  }
+  const gridTop = AX - 6;
+  groups.forEach(gr => {
+    if (!gr.rows.length) return;
+    g += `<text x="12" y="${y + 18}" class="grp">${esc(gr.name)}</text>`;
+    y += GH_;
+    gr.rows.forEach(j => {
+      const yc = y + RH / 2;
+      const lbl = V.group === 'equip' ? `${j.code} · ${j.test.short}` : j.test.key;
+      const xs = j.w1 ? x(j.w1.t) : null, x2 = j.w2 ? x(j.w2.t) : null, xe = x(j.end);
+      let marks = '';
+      if (j.w1 && j.w2) marks += `<rect x="${xs}" y="${yc - 2}" width="${Math.max(2, x2 - xs)}" height="4" rx="2" fill="var(--weigh)"/>`;
+      if (j.w2) {
+        const w = Math.max(4, xe - x2);
+        marks += `<rect class="heat" x="${x2}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="${j.test.color}" ${j.running ? 'fill-opacity=".55"' : ''}/>`;
+        if (j.running) marks += `<rect x="${x2}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="url(#hatch)"/>
+                                 <text x="${xe + 6}" y="${yc + 4}" font-size="11">running ${dur(now - j.w2.t)}</text>`;
+      }
+      [j.w1, j.w2, j.w3].forEach((w, i) => { if (w) marks += `<circle cx="${x(w.t)}" cy="${yc}" r="${i === 1 ? 0 : 3.5}" fill="var(--surface)" stroke="${i === 0 ? 'var(--muted)' : j.test.color}" stroke-width="2"/>`; });
+      g += `<g class="hit" tabindex="0" data-j="${esc(j.code)}|${esc(j.test.key)}">
+              <rect class="hl" x="0" y="${y}" width="${W}" height="${RH}" fill="transparent"/>
+              <text x="${LW - 8}" y="${yc + 4}" text-anchor="end">${esc(lbl)}</text>${marks}</g>`;
+      y += RH;
+    });
+  });
+  const grid = ticks.map(t => `<line x1="${x(t)}" x2="${x(t)}" y1="${gridTop}" y2="${H - 6}" stroke="var(--grid)"/>
+      ${now > t0 && now < t1 && Math.abs(x(t) - x(now)) < 40 ? '' : `<text x="${x(t)}" y="${AX - 12}" text-anchor="middle">${tickLbl(t)}</text>`}`).join('');
+  const nowLine = now > t0 && now < t1 ? `<line x1="${x(now)}" x2="${x(now)}" y1="${gridTop}" y2="${H - 6}" stroke="var(--now)" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="${x(now)}" y="${AX - 12}" text-anchor="middle" style="fill:var(--now);font-weight:700">now</text>` : '';
+
+  return `<div class="card">
+    <h2>What ran when</h2>
+    <p class="sub">Each row is one test on one sample. Hover or tap a row for the times and who weighed it.</p>
+    <div class="legend">
+      <span><i class="sw" style="height:4px;background:var(--weigh)"></i>Weighing (W1 → W2)</span>
+      <span><i class="sw" style="background:var(--ink2)"></i>In oven / furnace (W2 → W3), coloured by test</span>
+      <span><i class="sw" style="background:var(--ink2);opacity:.5;background-image:repeating-linear-gradient(45deg,transparent 0 3px,var(--surface) 3px 5px)"></i>Still running (no W3 yet)</span>
+      ${TESTS.filter(t => !V.hidden.has(t.key)).map(t => `<span><i class="sw" style="background:${t.color}"></i>${esc(t.key)}</span>`).join('')}
+    </div>
+    <div class="scroll"><svg width="${W}" height="${H}" role="img" aria-label="Timeline of weighing and heating for each sample and test">
+      <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="2" height="6" fill="var(--surface)" opacity=".7"/></pattern></defs>
+      <g class="axis">${grid}</g>${g}${nowLine}</svg></div></div>`;
+}
+
+function stepsFor(list, eq, t0, t1, now) {
+  const ev = [];
+  list.filter(j => j.w2 && j.test.eq === eq).forEach(j => { ev.push([j.w2.t, 1]); ev.push([j.w3 ? j.w3.t : now, -1]); });
+  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let c = 0, max = 0; const pts = [[t0, 0]];
+  ev.forEach(([t, d]) => { c += d; max = Math.max(max, c); pts.push([Math.max(t, t0), c]); });
+  return { pts, max };
+}
+
+function tableHTML(list) {
+  const rows = list.slice().sort((a, b) => b.start - a.start);
+  const cell = w => w ? `${when(w.t)} <span style="color:var(--muted)">${esc(w.by)}</span>` : '–';
+  return `<div class="card"><h2>All tests in this range</h2><p class="sub">Newest first.</p><div class="scroll"><table class="list">
+    <thead><tr><th>Sample</th><th>Test</th><th>W1 (empty)</th><th>W2 (with sample)</th><th>W3 (after heating)</th><th>Heating time</th></tr></thead>
+    <tbody>${rows.map(j => `<tr><td><b>${esc(j.code)}</b></td><td><i class="sw" style="width:10px;background:${j.test.color};margin-right:6px"></i>${esc(j.test.key)}</td>
+      <td>${cell(j.w1)}</td><td>${cell(j.w2)}</td><td>${cell(j.w3)}</td>
+      <td>${j.w2 ? (j.w3 ? dur(j.w3.t - j.w2.t) : 'running ' + dur(Date.now() - j.w2.t)) : '–'}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+
+/* ---------- tooltip ---------- */
+function showTip(el, cx, cy) {
+  const [code, key] = el.dataset.j.split('|');
+  const j = jobs().find(q => q.code === code && q.test.key === key); if (!j) return;
+  const r = (l, w) => `<tr><td>${l}</td><td>${w ? `<b>${when(w.t)}</b> · ${esc(w.by)}` : '<span style="color:var(--muted)">not yet</span>'}</td></tr>`;
+  tip.innerHTML = `<h3><i class="sw" style="width:10px;background:${j.test.color}"></i>${esc(code)} · ${esc(key)}</h3>
+    <table>${r('W1 empty', j.w1)}${r('W2 with sample', j.w2)}${r('W3 after heating', j.w3)}</table>
+    <div class="dur">${j.w2 ? (j.w3 ? `In ${j.test.eq.toLowerCase()}: <b>${dur(j.w3.t - j.w2.t)}</b>` : `In ${j.test.eq.toLowerCase()} for <b>${dur(Date.now() - j.w2.t)}</b> so far`) : 'Not in the ' + j.test.eq.toLowerCase() + ' yet'}
+      ${j.w1 && j.w2 ? `<br>Weighing took ${dur(j.w2.t - j.w1.t)}` : ''}</div>`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = cx + 14, top = cy + 14;
+  if (left + tw > innerWidth - 8) left = cx - tw - 14;
+  if (top + th > innerHeight - 8) top = cy - th - 14;
+  tip.style.left = Math.max(8, left) + 'px'; tip.style.top = Math.max(8, top) + 'px';
+}
+
+function wire() {
+  root.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { V.range = b.dataset.range; store.set('dash-range', V.range); render(); });
+  root.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { V.view = b.dataset.view; render(); });
+  root.querySelectorAll('.chip[data-test]').forEach(b => b.onclick = () => {
+    const k = b.dataset.test; V.hidden.has(k) ? V.hidden.delete(k) : V.hidden.add(k); render(); });
+  const g = document.getElementById('group'); if (g) g.onchange = () => { V.group = g.value; store.set('dash-group', V.group); render(); };
+  const r = document.getElementById('refresh'); if (r) r.onclick = load;
+  root.querySelectorAll('.hit').forEach(el => {
+    el.addEventListener('mousemove', e => showTip(el, e.clientX, e.clientY));
+    el.addEventListener('mouseleave', () => tip.hidden = true);
+    el.addEventListener('click', e => showTip(el, e.clientX, e.clientY));
+    el.addEventListener('focus', () => { const b = el.getBoundingClientRect(); showTip(el, b.left + 140, b.top + b.height); });
+    el.addEventListener('blur', () => tip.hidden = true);
+  });
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') tip.hidden = true; });
+document.addEventListener('scroll', () => tip.hidden = true, true);
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => RAW && render(), 150); });
+
+load();
+setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000);
+</script>
+</body>
+</html>

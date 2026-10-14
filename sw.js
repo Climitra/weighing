@@ -1,6 +1,6 @@
 // Service worker for the weighing app.
 // Change VERSION whenever you upload a new index.html so phones pick it up.
-const VERSION = 'weighing-v6';
+const VERSION = 'weighing-v7';
 const SHELL = ['./', './index.html', './manifest.json',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
@@ -24,10 +24,11 @@ self.addEventListener('fetch', e => {
 
   // The page itself: newest version when online, saved copy when offline
   if (req.mode === 'navigate') {
+    // each page keeps its own offline copy (the app and the dashboard never overwrite each other)
     e.respondWith(fetch(req).then(res => {
-      const copy = res.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy));
+      if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req.url.split('#')[0].split('?')[0], copy)); }
       return res;
-    }).catch(() => caches.match('./index.html')));
+    }).catch(() => caches.match(req.url.split('#')[0].split('?')[0]).then(hit => hit || caches.match('./index.html'))));
     return;
   }
 

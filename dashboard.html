@@ -104,7 +104,7 @@ let KEY = store.get('ghkey');                      // shared with the app on the
   if (m) { KEY = decodeURIComponent(m[1]).trim(); store.set('ghkey', KEY); history.replaceState(null, '', location.pathname); }
 })();
 
-const V = { range: store.get('dash-range') || 'today', group: store.get('dash-group') || 'equip', hidden: new Set(), view: 'chart' };
+const V = { range: store.get('dash-range') || 'today', group: store.get('dash-group') || 'equip', stage: store.get('dash-stage') || 'both', hidden: new Set(), view: 'chart' };
 let RAW = null, LOADED = 0, ERR = null;
 const root = document.getElementById('root'), tip = document.getElementById('tip');
 
@@ -197,6 +197,7 @@ function render() {
       ${TESTS.map(t => `<button class="chip" data-test="${esc(t.key)}" aria-pressed="${!V.hidden.has(t.key)}" style="--c:${t.color}"><i></i>${esc(t.key)}</button>`).join('')}
       <select id="group" aria-label="Group rows"><option value="equip"${V.group === 'equip' ? ' selected' : ''}>Group by oven / furnace</option>
         <option value="sample"${V.group === 'sample' ? ' selected' : ''}>Group by sample</option></select>
+      <div class="seg" role="group" aria-label="Stage"><button data-stage="both" aria-pressed="${V.stage === 'both'}">Both stages</button><button data-stage="weigh" aria-pressed="${V.stage === 'weigh'}">W1 → W2</button><button data-stage="heat" aria-pressed="${V.stage === 'heat'}">W2 → W3</button></div>
       <div class="seg" role="group" aria-label="View"><button data-view="chart" aria-pressed="${V.view === 'chart'}">Chart</button><button data-view="table" aria-pressed="${V.view === 'table'}">Table</button></div>
     </div>
     <div class="tiles">
@@ -214,11 +215,17 @@ function render() {
 
 function chartHTML(list, a, b, now) {
   // time window: the chosen range, trimmed to the data so the bars aren't squeezed
-  let t0 = Math.min(...list.map(j => j.start)), t1 = Math.max(...list.map(j => j.end), list.some(j => j.running) ? now : 0);
+  const sS = j => V.stage === 'heat' && j.w2 ? j.w2.t : j.start;
+  const sE = j => V.stage === 'weigh' && j.w2 ? j.w2.t : j.end;
+  const pick = V.stage === 'weigh' ? list.filter(j => j.w1 && j.w2) : V.stage === 'heat' ? list.filter(j => j.w2) : list;
+  let t0 = Math.min(...(pick.length ? pick : list).map(sS)), t1 = Math.max(...(pick.length ? pick : list).map(sE), V.stage !== 'weigh' && list.some(j => j.running) ? now : 0);
   if (isFinite(a)) { t0 = Math.max(t0, a); t1 = Math.min(Math.max(t1, t0 + 36e5), b); }
   const span = Math.max(t1 - t0, 36e5), pad = span * 0.03; t0 -= pad; t1 += pad;
 
-  // rows
+  // rows: with one stage chosen, keep only tests that have that stage
+  if (V.stage === 'weigh') list = list.filter(j => j.w1 && j.w2);
+  if (V.stage === 'heat') list = list.filter(j => j.w2);
+  if (!list.length) return `<div class="card"><div class="empty">No ${V.stage === 'weigh' ? 'W1 → W2' : 'W2 → W3'} stamps in this time range.</div></div>`;
   const sorted = list.slice().sort((x, y) => (x.w2 ? x.w2.t : x.start) - (y.w2 ? y.w2.t : y.start));
   const groups = V.group === 'equip'
     ? EQUIP.map(e => ({ name: e === 'Oven' ? 'Oven: Moisture, Total Moisture' : 'Furnace: VM, Ash', eq: e, rows: sorted.filter(j => j.test.eq === e) }))
@@ -228,11 +235,13 @@ function chartHTML(list, a, b, now) {
   const LW = 128, RH = 26, GH_ = 28, AX = 30, LOAD = 46;
   const W = Math.max(760, (document.querySelector('.wrap').clientWidth || 1000) - 2);
   const RP = 128;                                   // room on the right for "running …" labels
-  const plotW = W - LW - RP;
-  const x = t => LW + (t - t0) / (t1 - t0) * plotW;
+  const LP = V.stage !== 'heat' ? 110 : 0;        // room on the left for the "W1→W2 4 min" labels
+  const plotW = W - LW - RP - LP;
+  const x = t => LW + LP + (t - t0) / (t1 - t0) * plotW;
   const nRows = groups.reduce((n, g) => n + (g.rows.length ? g.rows.length : 0), 0);
   const nGroups = groups.filter(g => g.rows.length).length;
-  const H = AX + (V.group === 'equip' ? EQUIP.length * (LOAD + 8) + 10 : 0) + nGroups * GH_ + nRows * RH + 10;
+  const strips = V.group === 'equip' && V.stage !== 'weigh';
+  const H = AX + (strips ? EQUIP.length * (LOAD + 8) + 10 : 0) + nGroups * GH_ + nRows * RH + 10;
 
   // hour ticks
   const stepH = [1, 2, 3, 6, 12, 24].find(h => span / (h * 36e5) <= 12) || 24;
@@ -242,7 +251,7 @@ function chartHTML(list, a, b, now) {
 
   let y = AX, g = '';
   // concurrency strips: how many tests are heating at the same time (one per equipment, same scale)
-  if (V.group === 'equip') {
+  if (strips) {
     const maxC = Math.max(1, ...EQUIP.map(e => stepsFor(list, e, t0, t1, now).max));
     g += `<text x="${LW - 8}" y="${y - 10}" text-anchor="end" class="grp">Heating at once</text>`;
     EQUIP.forEach(e => {
@@ -251,7 +260,7 @@ function chartHTML(list, a, b, now) {
       st.pts.forEach(([t, c], i) => { const nx = i + 1 < st.pts.length ? st.pts[i + 1][0] : t1; d += ` L${x(t)},${y + h - c / maxC * h} L${x(nx)},${y + h - c / maxC * h}`; });
       d += ` L${x(t1)},${y + h} Z`;
       g += `<text x="${LW - 8}" y="${y + h / 2 + 4}" text-anchor="end">${e} (max ${st.max})</text>
-            <rect x="${LW}" y="${y}" width="${plotW}" height="${h}" fill="var(--grid)" opacity=".5" rx="3"/>
+            <rect x="${LW + LP}" y="${y}" width="${plotW}" height="${h}" fill="var(--grid)" opacity=".5" rx="3"/>
             <path d="${d}" fill="var(--ink2)" opacity=".35"/>`;
       y += LOAD + 8;
     });
@@ -267,14 +276,28 @@ function chartHTML(list, a, b, now) {
       const lbl = V.group === 'equip' ? `${j.code} · ${j.test.short}` : j.test.key;
       const xs = j.w1 ? x(j.w1.t) : null, x2 = j.w2 ? x(j.w2.t) : null, xe = x(j.end);
       let marks = '';
-      if (j.w1 && j.w2) marks += `<rect x="${xs}" y="${yc - 2}" width="${Math.max(2, x2 - xs)}" height="4" rx="2" fill="var(--weigh)"/>`;
-      if (j.w2) {
-        const w = Math.max(4, xe - x2);
-        marks += `<rect class="heat" x="${x2}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="${j.test.color}" ${j.running ? 'fill-opacity=".55"' : ''}/>`;
-        if (j.running) marks += `<rect x="${x2}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="url(#hatch)"/>
-                                 <text x="${xe + 6}" y="${yc + 4}" font-size="11">running ${dur(now - j.w2.t)}</text>`;
+      const showW = V.stage !== 'heat', showH = V.stage !== 'weigh';
+      // stamp 1: W1 → W2 (weighing). Light bar with the test colour as outline, its time written to the left.
+      if (showW && j.w1 && j.w2) {
+        const bw = Math.max(6, x2 - xs), bx = Math.min(xs, x2 - 6);
+        marks += `<rect x="${bx}" y="${yc - 7}" width="${bw}" height="14" rx="4" fill="${j.test.color}" fill-opacity=".18" stroke="${j.test.color}" stroke-width="1.5"/>
+                  <text x="${bx - 6}" y="${yc + 4}" text-anchor="end" font-size="11">W1→W2 ${dur(j.w2.t - j.w1.t)}</text>`;
+      } else if (showW && j.w1 && !j.w2) {
+        marks += `<circle cx="${xs}" cy="${yc}" r="4" fill="var(--surface)" stroke="${j.test.color}" stroke-width="2"/>
+                  ${xs > LW + LP + plotW - 160
+                    ? `<text x="${xs - 9}" y="${yc + 4}" font-size="11" text-anchor="end">W1 at ${hm(j.w1.t)}, waiting for W2</text>`
+                    : `<text x="${xs + 9}" y="${yc + 4}" font-size="11">W1 at ${hm(j.w1.t)}, waiting for W2</text>`}`;
       }
-      [j.w1, j.w2, j.w3].forEach((w, i) => { if (w) marks += `<circle cx="${x(w.t)}" cy="${yc}" r="${i === 1 ? 0 : 3.5}" fill="var(--surface)" stroke="${i === 0 ? 'var(--muted)' : j.test.color}" stroke-width="2"/>`; });
+      // stamp 2: W2 → W3 (in oven / furnace). Solid bar, starts just after stamp 1 with a small gap.
+      if (showH && j.w2) {
+        const hx = x2 + (showW && j.w1 ? 3 : 0), w = Math.max(4, xe - hx);
+        const label = j.running ? `W2→W3 running ${dur(now - j.w2.t)}` : `W2→W3 ${dur(j.w3.t - j.w2.t)}`;
+        marks += `<rect class="heat" x="${hx}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="${j.test.color}" ${j.running ? 'fill-opacity=".55"' : ''}/>`;
+        if (j.running) marks += `<rect x="${hx}" y="${yc - 7}" width="${w}" height="14" rx="4" fill="url(#hatch)"/>`;
+        marks += w > label.length * 6.4 + 12
+          ? `<text x="${hx + 8}" y="${yc + 4}" font-size="11" style="fill:#fff;font-weight:700">${label}</text>`
+          : `<text x="${hx + w + 6}" y="${yc + 4}" font-size="11">${label}</text>`;
+      }
       g += `<g class="hit" tabindex="0" data-j="${esc(j.code)}|${esc(j.test.key)}">
               <rect class="hl" x="0" y="${y}" width="${W}" height="${RH}" fill="transparent"/>
               <text x="${LW - 8}" y="${yc + 4}" text-anchor="end">${esc(lbl)}</text>${marks}</g>`;
@@ -290,9 +313,9 @@ function chartHTML(list, a, b, now) {
     <h2>What ran when</h2>
     <p class="sub">Each row is one test on one sample. Hover or tap a row for the times and who weighed it.</p>
     <div class="legend">
-      <span><i class="sw" style="height:4px;background:var(--weigh)"></i>Weighing (W1 → W2)</span>
-      <span><i class="sw" style="background:var(--ink2)"></i>In oven / furnace (W2 → W3), coloured by test</span>
-      <span><i class="sw" style="background:var(--ink2);opacity:.5;background-image:repeating-linear-gradient(45deg,transparent 0 3px,var(--surface) 3px 5px)"></i>Still running (no W3 yet)</span>
+      ${V.stage !== 'heat' ? `<span><i class="sw" style="background:transparent;border:1.5px solid var(--ink2)"></i>W1 → W2: weighing (time on the left)</span>` : ''}
+      ${V.stage !== 'weigh' ? `<span><i class="sw" style="background:var(--ink2)"></i>W2 → W3: in oven / furnace (time on the bar)</span>` : ''}
+      ${V.stage !== 'weigh' ? `<span><i class="sw" style="background:var(--ink2);opacity:.5;background-image:repeating-linear-gradient(45deg,transparent 0 3px,var(--surface) 3px 5px)"></i>Still running (no W3 yet)</span>` : ''}
       ${TESTS.filter(t => !V.hidden.has(t.key)).map(t => `<span><i class="sw" style="background:${t.color}"></i>${esc(t.key)}</span>`).join('')}
     </div>
     <div class="scroll"><svg width="${W}" height="${H}" role="img" aria-label="Timeline of weighing and heating for each sample and test">
@@ -389,6 +412,7 @@ function showTip(el, cx, cy) {
 function wire() {
   root.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { V.range = b.dataset.range; store.set('dash-range', V.range); render(); });
   root.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { V.view = b.dataset.view; render(); });
+  root.querySelectorAll('[data-stage]').forEach(b => b.onclick = () => { V.stage = b.dataset.stage; store.set('dash-stage', V.stage); render(); });
   root.querySelectorAll('.chip[data-test]').forEach(b => b.onclick = () => {
     const k = b.dataset.test; V.hidden.has(k) ? V.hidden.delete(k) : V.hidden.add(k); render(); });
   const g = document.getElementById('group'); if (g) g.onchange = () => { V.group = g.value; store.set('dash-group', V.group); render(); };

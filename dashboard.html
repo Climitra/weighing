@@ -208,7 +208,7 @@ function render() {
         `<div class="tile"><b>${dur(heat(t.key))}</b><span>typical ${esc(t.key)} time in ${t.eq.toLowerCase()} (W2→W3)</span></div>`).join('')}
     </div>
     ${!list.length ? `<div class="card"><div class="empty">No weighing in this time range${RAW && !Object.keys(RAW).length ? ' yet. Timestamps start from the first weight saved after the app update' : ''}.</div></div>`
-      : V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)}`;
+      : (V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)) + weighHTML(list)}`;
   wire();
 }
 
@@ -301,6 +301,54 @@ function chartHTML(list, a, b, now) {
       <g class="axis">${grid}</g>${g}${nowLine}</svg></div></div>`;
 }
 
+/* ---------- weighing time: W1 (empty) → W2 (with sample) ----------
+   Credited to the person who saved W2, since they added and weighed the sample. */
+const fmtMin = ms => { const m = ms / 6e4; return m < 1 ? `${Math.round(ms / 1000)} s` : m < 60 ? `${m.toFixed(m < 10 ? 1 : 0)} min` : dur(ms); };
+function weighHTML(list) {
+  const w = list.filter(j => j.w1 && j.w2 && j.w2.t >= j.w1.t).map(j => ({ j, ms: j.w2.t - j.w1.t, by: j.w2.by }));
+  if (!w.length) return `<div class="card"><h2>Weighing time (W1 → W2)</h2><p class="sub">No sample has both W1 and W2 in this range yet.</p></div>`;
+  const tests = TESTS.filter(t => !V.hidden.has(t.key) && w.some(x => x.j.test.key === t.key));
+  // scale fits the usual times (90th percentile); unusually long waits sit at the right edge with their own label
+  const srt = w.map(q => q.ms).sort((a, b) => a - b), p90 = srt[Math.min(srt.length - 1, Math.floor(srt.length * 0.9))];
+  const CAP = Math.min(30 * 6e4, Math.max(2 * 6e4, p90 * 1.4));
+  const LW = 128, RP = 150, RH = 34, W = Math.max(760, (document.querySelector('.wrap').clientWidth || 1000) - 2), pw = W - LW - RP;
+  const maxMs = Math.min(CAP, Math.max(...w.map(x => x.ms)) * 1.05 || 6e4), slow = w.some(q => q.ms > maxMs);
+  const x = ms => LW + Math.min(ms, maxMs) / maxMs * pw;
+  const stepM = [0.5, 1, 2, 5, 10].find(m => maxMs / 6e4 / m <= 8) || 10;
+  let ticks = ''; for (let m = 0; m * 6e4 <= maxMs; m += stepM)
+    ticks += `<line x1="${x(m * 6e4)}" x2="${x(m * 6e4)}" y1="22" y2="${22 + tests.length * RH}" stroke="var(--grid)"/>
+              <text x="${x(m * 6e4)}" y="14" text-anchor="middle">${m} min</text>`;
+  let rows = '';
+  tests.forEach((t, i) => {
+    const pts = w.filter(q => q.j.test.key === t.key), med = median(pts.map(q => q.ms)), y = 22 + i * RH + RH / 2;
+    rows += `<text x="${LW - 8}" y="${y + 4}" text-anchor="end">${esc(t.key)}</text>`;
+    pts.forEach(q => {
+      const over = q.ms > maxMs;
+      rows += `<g class="hit" tabindex="0" data-j="${esc(q.j.code)}|${esc(t.key)}">
+        <circle cx="${x(q.ms)}" cy="${y}" r="9" fill="transparent"/>
+        <circle cx="${x(q.ms)}" cy="${y}" r="5" fill="${t.color}" fill-opacity=".75" stroke="var(--surface)" stroke-width="2"/>
+        ${over ? `<text x="${x(q.ms) - 8}" y="${y - 8}" font-size="10" text-anchor="end">${fmtMin(q.ms)} ›</text>` : ''}</g>`;
+    });
+    rows += `<line x1="${x(med)}" x2="${x(med)}" y1="${y - 12}" y2="${y + 12}" stroke="var(--ink)" stroke-width="2"/>
+             <text x="${LW + pw + 12}" y="${y + 4}">typical <tspan font-weight="700" style="fill:var(--ink)">${fmtMin(med)}</tspan> · ${pts.length}</text>`;
+  });
+  // per person
+  const people = [...new Set(w.map(q => q.by))].sort();
+  const cell = (p, t) => { const v = w.filter(q => q.by === p && q.j.test.key === t.key).map(q => q.ms);
+    return v.length ? `<b>${fmtMin(median(v))}</b> <span style="color:var(--muted)">(${v.length})</span>` : '<span style="color:var(--muted)">–</span>'; };
+  return `<div class="card">
+    <h2>Weighing time (W1 → W2)</h2>
+    <p class="sub">How long from weighing the empty dish or crucible to saving it with the sample. Each dot is one sample; the dark line is the typical (median) time.${slow ? ' Unusually long waits are pinned at the right edge with their time written next to them.' : ''}</p>
+    <div class="scroll"><svg width="${W}" height="${30 + tests.length * RH}" role="img" aria-label="Weighing time per sample for each test">
+      <g class="axis">${ticks}</g>${rows}</svg></div>
+    <div class="scroll" style="margin-top:6px"><table class="list">
+      <thead><tr><th>Weighed by (W2)</th>${tests.map(t => `<th><i class="sw" style="width:10px;background:${t.color};margin-right:6px"></i>${esc(t.key)}</th>`).join('')}<th>All tests</th></tr></thead>
+      <tbody>${people.map(p => `<tr><td><b>${esc(p)}</b></td>${tests.map(t => `<td>${cell(p, t)}</td>`).join('')}
+        <td>${fmtMin(median(w.filter(q => q.by === p).map(q => q.ms)))} <span style="color:var(--muted)">(${w.filter(q => q.by === p).length})</span></td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="sub" style="margin-top:8px">Typical time, with the number of samples in brackets.</p></div>`;
+}
+
 function stepsFor(list, eq, t0, t1, now) {
   const ev = [];
   list.filter(j => j.w2 && j.test.eq === eq).forEach(j => { ev.push([j.w2.t, 1]); ev.push([j.w3 ? j.w3.t : now, -1]); });
@@ -314,9 +362,10 @@ function tableHTML(list) {
   const rows = list.slice().sort((a, b) => b.start - a.start);
   const cell = w => w ? `${when(w.t)} <span style="color:var(--muted)">${esc(w.by)}</span>` : '–';
   return `<div class="card"><h2>All tests in this range</h2><p class="sub">Newest first.</p><div class="scroll"><table class="list">
-    <thead><tr><th>Sample</th><th>Test</th><th>W1 (empty)</th><th>W2 (with sample)</th><th>W3 (after heating)</th><th>Heating time</th></tr></thead>
+    <thead><tr><th>Sample</th><th>Test</th><th>W1 (empty)</th><th>W2 (with sample)</th><th>W3 (after heating)</th><th>Weighing time</th><th>Heating time</th></tr></thead>
     <tbody>${rows.map(j => `<tr><td><b>${esc(j.code)}</b></td><td><i class="sw" style="width:10px;background:${j.test.color};margin-right:6px"></i>${esc(j.test.key)}</td>
       <td>${cell(j.w1)}</td><td>${cell(j.w2)}</td><td>${cell(j.w3)}</td>
+      <td>${j.w1 && j.w2 ? dur(j.w2.t - j.w1.t) : '–'}</td>
       <td>${j.w2 ? (j.w3 ? dur(j.w3.t - j.w2.t) : 'running ' + dur(Date.now() - j.w2.t)) : '–'}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 

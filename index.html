@@ -138,7 +138,7 @@
 
 <script>
 /* ====== SETTINGS: where the results are stored (a PRIVATE GitHub repository) ====== */
-const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'data.json', branch: 'main' };
+const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'data.json', tsPath: 'timestamps.json', branch: 'main' };
 /* The access key is NOT written here. It is given to each phone once with the setup link:
    https://girish-vastrakar.github.io/weighing/#key=YOUR_KEY   (the app saves it and hides it)  */
 
@@ -367,8 +367,8 @@ function b64decode(b64) {
 }
 const emptyFile = () => ({ app: 'proximate-weighing', version: 1, codes: [], samples: {} });
 // Read the data file. Returns { file, sha }; file is null if it doesn't exist yet.
-async function ghRead() {
-  const url = `${API}/contents/${GH.path}?ref=${GH.branch}`;
+async function ghRead(path = GH.path) {
+  const url = `${API}/contents/${path}?ref=${GH.branch}`;
   let meta;
   try { meta = await (await gh('GET', url)).json(); }
   catch (e) {
@@ -384,10 +384,56 @@ async function ghRead() {
              : await (await gh('GET', url, null, 'application/vnd.github.raw+json')).text();   // files over 1 MB
   return { file: JSON.parse(text), sha: meta.sha };
 }
-async function ghWrite(file, sha, message) {
+async function ghWrite(file, sha, message, path = GH.path) {
   const body = { message, branch: GH.branch, content: b64encode(JSON.stringify(file, null, 1)) };
   if (sha) body.sha = sha;
-  return (await (await gh('PUT', `${API}/contents/${GH.path}`, body)).json()).content.sha;
+  return (await (await gh('PUT', `${API}/contents/${path}`, body)).json()).content.sha;
+}
+
+/* ---------- timestamps.json: who saved each W1/W2/W3 and when ----------
+   { "T218": { "Moisture": { "W1": { "at": "2026-10-14T14:48:05+05:30", "by": "Ramesh" }, "W2": {...}, "W3": {...} },
+               "VM": {...}, "Ash": {...} } }                                                                     */
+const TS_NAME = { MC: 'Moisture', VM: 'VM', ASH: 'Ash', TM: 'Total Moisture' };
+function isoLocal(ms) {
+  const d = new Date(ms || Date.now()), p = n => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset(), sign = off >= 0 ? '+' : '-', a = Math.abs(off);
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${sign}${p(Math.floor(a / 60))}:${p(a % 60)}`;
+}
+function tsApply(t, j) {
+  if (j.action === 'saveWeight') {
+    const c = t[j.code] = t[j.code] || {}, k = c[TS_NAME[j.key]] = c[TS_NAME[j.key]] || {};
+    k['W' + j.step] = { at: isoLocal(j.at), by: j.worker || 'Unknown' };
+  } else if (j.action === 'resetTest') {
+    if (t[j.code]) { delete t[j.code][TS_NAME[j.key]]; if (!Object.keys(t[j.code]).length) delete t[j.code]; }
+  } else if (j.action === 'removeCode') {
+    delete t[j.code];
+  }
+}
+const TS_ACTIONS = ['saveWeight', 'resetTest', 'removeCode'];
+let QT = (() => { try { return JSON.parse(store.get('tsqueue')) || []; } catch (e) { return []; } })();
+let tsSyncing = false, tsTimer = null;
+function saveQT() { store.set('tsqueue', JSON.stringify(QT)); }
+// Sent after data.json is saved; kept on the phone and retried on its own if it fails
+async function syncTs() {
+  clearTimeout(tsTimer); tsTimer = null;
+  if (tsSyncing || !QT.length || !KEY) return;
+  tsSyncing = true;
+  const batch = QT.slice();
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const { file, sha } = await ghRead(GH.tsPath);
+      const t = file || {};
+      batch.forEach(j => tsApply(t, j));
+      try { await ghWrite(t, sha, 'timestamps: ' + commitMessage(batch), GH.tsPath); break; }
+      catch (e) { if (e.code !== 'CONFLICT' || attempt >= 4) throw e; }
+    }
+    const sent = new Set(batch.map(j => j.id));
+    QT = QT.filter(j => !sent.has(j.id)); saveQT();
+  } catch (err) {
+    if (err.code !== 'KEY') tsTimer = setTimeout(syncTs, 30000);
+  }
+  tsSyncing = false;
+  if (QT.length && !tsTimer) syncTs();
 }
 
 /* ---------- the data file <-> what the screens use ---------- */
@@ -511,6 +557,7 @@ async function sync() {
     }
     const sent = new Set(batch.map(j => j.id));
     Q = Q.filter(j => !sent.has(j.id)); saveQ(); cacheFile();
+    QT.push(...batch.filter(j => TS_ACTIONS.includes(j.action))); saveQT(); syncTs();
     syncFails = 0; lastSyncOk = Date.now();
     rebuild();
     if (!S.modal && S.view !== 'step' && S.view !== 'setup') render();
@@ -1165,6 +1212,7 @@ setInterval(() => {
 })();
 S.tests = TESTS; S.order = ORDER;
 S.file = readJSON('file', null);
+setTimeout(syncTs, 1500);
 if (S.file && S.file.codes) rebuild();
 if (S.worker) { if (S.data) render(); else renderNotReady(); load(); sync(); } else render();
 showSync();

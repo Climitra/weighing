@@ -105,12 +105,12 @@ let KEY = store.get('ghkey');                      // shared with the app on the
 })();
 
 const V = { range: store.get('dash-range') || 'today', group: store.get('dash-group') || 'equip', stage: store.get('dash-stage') || 'both', hidden: new Set(), view: 'chart' };
-let RAW = null, LOADED = 0, ERR = null;
+let RAW = null, BLOG = null, LOADED = 0, ERR = null;
 const root = document.getElementById('root'), tip = document.getElementById('tip');
 
 /* ---------- data ---------- */
-async function fetchLog() {
-  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}?ref=${GH.branch}`;
+async function fetchLog(path = GH.path) {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${path}?ref=${GH.branch}`;
   const res = await fetch(url, { cache: 'no-store', headers: { Authorization: 'Bearer ' + KEY, Accept: 'application/vnd.github.raw+json' } });
   if (res.status === 404) return {};
   if (res.status === 401 || res.status === 403) throw new Error('The storage key was not accepted.');
@@ -119,7 +119,7 @@ async function fetchLog() {
 }
 async function load() {
   if (!KEY) { renderKey(); return; }
-  try { RAW = await fetchLog(); ERR = null; LOADED = Date.now(); }
+  try { [RAW, BLOG] = await Promise.all([fetchLog(), fetchLog('timerlog.json')]); ERR = null; LOADED = Date.now(); }
   catch (e) { ERR = e.message === 'Failed to fetch' ? 'No internet connection.' : e.message; }
   render();
 }
@@ -209,7 +209,8 @@ function render() {
         `<div class="tile"><b>${dur(heat(t.key))}</b><span>typical ${esc(t.key)} time in ${t.eq.toLowerCase()} (W2→W3)</span></div>`).join('')}
     </div>
     ${!list.length ? `<div class="card"><div class="empty">No weighing in this time range${RAW && !Object.keys(RAW).length ? ' yet. Timestamps start from the first weight saved after the app update' : ''}.</div></div>`
-      : (V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)) + weighHTML(list)}`;
+      : (V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)) + weighHTML(list)}
+    ${batchesHTML(a, b, now)}`;
   wire();
 }
 
@@ -372,6 +373,159 @@ function weighHTML(list) {
     <p class="sub" style="margin-top:8px">Typical time, with the number of samples in brackets.</p></div>`;
 }
 
+/* ---------- oven & furnace batches (from the Lab Timer's timerlog.json) ---------- */
+const TEST_OF = { MC: TESTS[0], VM: TESTS[2], ASH: TESTS[3] };
+const SECS = [['O1', 'Oven 1'], ['O2', 'Oven 2'], ['F1', 'Furnace 1'], ['F2', 'Furnace 2']];
+// Which samples were really in each batch is decided by the W3 log:
+// a sample belongs to the batch of its test that was taken out last before its W3 was weighed
+// (and that started after its W2). The timer's expected list only breaks ties between batches taken out within 15 min.
+function confirmBatches(all) {
+  const conf = {}; all.forEach(q => { conf[q.id] = []; });
+  const done = all.filter(q => !q.running);
+  Object.entries(RAW || {}).forEach(([code, tests]) => {
+    Object.entries(TEST_OF).forEach(([k, t]) => {
+      const r = tests[t.key]; if (!r || !r.W3) return;
+      const t3 = Date.parse(r.W3.at), t2 = r.W2 ? Date.parse(r.W2.at) : -Infinity;
+      const cand = done.filter(q => q.testKey === k && q.end <= t3 && q.start >= t2 - 60000);
+      if (!cand.length) return;
+      // the W3 timing decides: the batch taken out most recently before this W3.
+      // Only if another batch came out within 15 min of it does the timer's expected list break the tie.
+      const latest = cand.reduce((x, y) => (y.end > x.end ? y : x));
+      const close = cand.filter(q => latest.end - q.end <= 15 * 60000);
+      const pick = latest.expected.includes(code) ? latest : (close.find(q => q.expected.includes(code)) || latest);
+      conf[pick.id].push({ code, t3, by: r.W3.by });
+    });
+  });
+  return conf;
+}
+function batchList(a, b, now) {
+  const all = Object.values((BLOG && BLOG.batches) || {}).map(e => {
+    const start = Date.parse(e.started), end = e.takenOut ? Date.parse(e.takenOut) : now;
+    const expected = e.expected || e.samples || [];
+    return Object.assign({}, e, { start, end, running: !e.takenOut, testKey: e.test, test: TEST_OF[e.test] || TESTS[0], expected,
+      actualMs: end - start, plannedMs: e.plannedMin * 6e4,
+      snoozeMin: (e.events || []).filter(x => x.type === 'snooze').reduce((s, x) => s + x.min, 0),
+      snoozes: (e.events || []).filter(x => x.type === 'snooze').length,
+      addMin: (e.events || []).filter(x => x.type === 'add').reduce((s, x) => s + x.min, 0) });
+  });
+  const conf = confirmBatches(all);
+  all.forEach(q => {
+    const c = conf[q.id].sort((x, y) => x.t3 - y.t3);
+    q.confirmed = c.map(z => z.code);
+    q.w3n = c.length; q.w3first = c.length ? c[0].t3 : null; q.w3last = c.length ? c[c.length - 1].t3 : null;
+    q.missing = q.expected.filter(code => !q.confirmed.includes(code));     // expected, but no W3 for this batch (yet)
+    q.extra = q.confirmed.filter(code => !q.expected.includes(code));       // not expected, but W3 says it was in
+    // samples in the batch: confirmed by W3 once weighing has started, otherwise the expected list
+    q.count = q.w3n ? q.w3n : q.expected.length; q.counted = q.w3n ? 'W3' : 'expected';
+    // weighing the whole batch: weigh-in = first W1 → last W2 of its samples, weigh-out = first W3 → last W3
+    const mem = q.w3n ? q.confirmed : q.expected, nm = q.test.key;
+    const tOf = (c, st) => { const r = RAW && RAW[c] && RAW[c][nm] && RAW[c][nm][st]; return r ? Date.parse(r.at) : null; };
+    const w1s = mem.map(c => tOf(c, 'W1')).filter(Boolean), w2s = mem.map(c => tOf(c, 'W2')).filter(Boolean);
+    q.inFirst = w1s.length ? Math.min(...w1s) : (w2s.length ? Math.min(...w2s) : null);
+    q.inLast = w2s.length ? Math.max(...w2s) : null;
+    q.inMs = q.inFirst != null && q.inLast != null && q.inLast >= q.inFirst ? q.inLast - q.inFirst : null;
+    q.inN = w2s.length;
+    q.idleMs = q.inLast != null && q.start >= q.inLast ? q.start - q.inLast : null;      // last W2 → into the oven
+    q.outMs = q.w3n > 1 ? q.w3last - q.w3first : (q.w3n === 1 ? 0 : null);
+    q.cycleMs = q.inFirst != null && q.w3last ? q.w3last - q.inFirst : null;            // whole job, first W1 → last W3
+    q.fill = q.capacity ? q.count / q.capacity : 0;
+  });
+  return all.filter(x => x.end >= a && x.start < b && !V.hidden.has(x.test.key)).sort((x, y) => x.start - y.start);
+}
+function batchesHTML(a, b, now) {
+  const L = batchList(a, b, now);
+  if (!L.length) return `<div class="card"><h2>Oven &amp; furnace batches</h2>
+    <p class="sub">No batches from the Lab Timer in this range yet. Each time a worker starts a timer, the batch appears here with its samples, planned and actual time.</p></div>`;
+  // lanes: one per section, bars = batches
+  let t0 = Math.min(...L.map(x => Math.min(x.start, x.inFirst || x.start))), t1 = Math.max(...L.map(x => Math.max(x.end, x.w3last || x.end)));
+  if (isFinite(a)) { t0 = Math.max(t0, a); t1 = Math.min(Math.max(t1, t0 + 36e5), b); }
+  const span = Math.max(t1 - t0, 36e5); t0 -= span * .02; t1 += span * .02;
+  const LW = 110, RP = 20, RH = 54, AX = 26, W = Math.max(760, (document.querySelector('.wrap').clientWidth || 1000) - 2), pw = W - LW - RP;
+  const x = t => LW + (Math.min(Math.max(t, t0), t1) - t0) / (t1 - t0) * pw;
+  const stepH = [1, 2, 3, 6, 12, 24].find(h => span / (h * 36e5) <= 12) || 24;
+  let grid = ''; const s0 = new Date(t0); s0.setMinutes(0, 0, 0);
+  for (let t = s0.getTime(); t <= t1; t += 36e5) { const d = new Date(t); if (d.getHours() % stepH || t < t0) continue;
+    grid += `<line x1="${x(t)}" x2="${x(t)}" y1="${AX - 6}" y2="${AX + SECS.length * RH}" stroke="var(--grid)"/>
+             <text x="${x(t)}" y="${AX - 12}" text-anchor="middle">${d.getHours() === 0 || stepH >= 24 ? dayLabel(t) : hm(t)}</text>`; }
+  let lanes = '';
+  SECS.forEach(([id, name], i) => {
+    const y = AX + i * RH, yc = y + RH / 2;
+    lanes += `<text x="${LW - 10}" y="${yc + 4}" text-anchor="end" class="grp">${name}</text>
+              <line x1="${LW}" x2="${LW + pw}" y1="${y + RH}" y2="${y + RH}" stroke="var(--grid)"/>`;
+    L.filter(q => q.sectionId === id).forEach(q => {
+      const bx = x(q.start), bw = Math.max(5, x(q.end) - bx), px = x(q.start + q.plannedMs);
+      const lbl = `${q.test.short} ${q.count}/${q.capacity} · ${dur(q.actualMs)}`;
+      const strip = (t0_, t1_) => t0_ != null && t1_ != null ? `<rect x="${x(t0_)}" y="${yc + 14}" width="${Math.max(3, x(t1_) - x(t0_))}" height="6" rx="3" fill="${q.test.color}" fill-opacity=".35" stroke="${q.test.color}" stroke-width="1"/>` : '';
+      lanes += `<g class="hit" tabindex="0" data-b="${esc(q.id)}">
+        ${strip(q.inFirst, q.inLast)}${q.w3n ? strip(q.w3first, q.w3last) : ''}
+        <rect x="${bx}" y="${yc - 12}" width="${bw}" height="24" rx="5" fill="${q.test.color}" ${q.running ? 'fill-opacity=".55"' : ''}/>
+        ${q.running ? `<rect x="${bx}" y="${yc - 12}" width="${bw}" height="24" rx="5" fill="url(#hatch2)"/>` : ''}
+        ${q.end > q.start + q.plannedMs + 60000 ? `<line x1="${px}" x2="${px}" y1="${yc - 16}" y2="${yc + 16}" stroke="var(--ink)" stroke-width="2" stroke-dasharray="3 2"/>` : ''}
+        ${bw > lbl.length * 6.6 + 10 ? `<text x="${bx + 7}" y="${yc + 4}" style="fill:#fff;font-weight:700">${esc(lbl)}</text>` : ''}</g>`;
+    });
+  });
+  // per-section summary for planning
+  const rows = SECS.map(([id, name]) => {
+    const q = L.filter(z => z.sectionId === id && !z.running); if (!q.length && !L.some(z => z.sectionId === id)) return '';
+    const byTest = {}; q.forEach(z => (byTest[z.test.key] = byTest[z.test.key] || []).push(z));
+    return Object.entries(byTest).map(([k, arr]) => `<tr><td><b>${name}</b></td><td><i class="sw" style="width:10px;background:${arr[0].test.color};margin-right:6px"></i>${esc(k)}</td>
+      <td>${arr.length}</td><td>${Math.round(median(arr.map(z => z.fill)) * 100)}% <span style="color:var(--muted)">(${median(arr.map(z => z.count))} of ${arr[0].capacity})</span></td>
+      <td>${dur(median(arr.map(z => z.plannedMs)))}</td><td><b>${dur(median(arr.map(z => z.actualMs)))}</b></td>
+      <td>${arr.filter(z => z.actualMs > z.plannedMs + 60000).length} of ${arr.length}</td>
+      <td>${batchTime(arr, 'inMs', 'inN')}</td><td>${batchTime(arr, 'outMs', 'w3n')}</td>
+      <td>${arr.some(z => z.cycleMs != null) ? dur(median(arr.filter(z => z.cycleMs != null).map(z => z.cycleMs))) : '–'}</td></tr>`).join('');
+  }).join('');
+  const recent = L.slice().reverse();
+  return `<div class="card">
+    <h2>Oven &amp; furnace batches</h2>
+    <p class="sub">From the Lab Timer: each bar is one batch, from Start to "taken out". Label: samples in / capacity · actual time. Which samples were in a batch is confirmed from the W3 times (a sample belongs to the batch taken out just before its W3); until W3s are weighed, the timer's oldest-first guess is shown as "expected". A dashed line marks the planned end when a batch ran longer. The thin strips under each bar show weighing the whole batch: before it goes in (first W1 → last W2) and after it comes out (first W3 → last W3).</p>
+    <div class="scroll"><svg width="${W}" height="${AX + SECS.length * RH + 6}" role="img" aria-label="Batches per oven and furnace over time">
+      <defs><pattern id="hatch2" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="6" fill="var(--surface)" opacity=".7"/></pattern></defs>
+      <g class="axis">${grid}</g>${lanes}</svg></div>
+    ${rows ? `<h2 style="margin-top:14px">For planning</h2><p class="sub">Finished batches in this range, typical values.</p>
+    <div class="scroll"><table class="list"><thead><tr><th>Section</th><th>Test</th><th>Batches</th><th>Typical fill</th><th>Planned</th><th>Actual in</th><th>Ran over plan</th><th>Weigh-in (W1→W2, whole batch)</th><th>Weigh-out (all W3)</th><th>Whole cycle</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : ''}
+    <h2 style="margin-top:14px">All batches</h2>
+    <div class="scroll"><table class="list"><thead><tr><th>Started</th><th>Section</th><th>Test</th><th>Samples</th><th>Planned</th><th>Actual</th><th>Weigh-in</th><th>Snoozed / added</th><th>W3 weighed (weigh-out)</th></tr></thead>
+      <tbody>${recent.map(q => `<tr><td>${when(q.start)}</td><td>${esc(q.section)}</td>
+        <td><i class="sw" style="width:10px;background:${q.test.color};margin-right:6px"></i>${esc(q.test.key)}</td>
+        <td title="${esc((q.w3n ? q.confirmed : q.expected).join(', '))}">${q.count}/${q.capacity} <span style="color:var(--muted)">${q.w3n ? 'by W3' : 'expected'} · ${esc((q.w3n ? q.confirmed : q.expected).slice(0, 3).join(', '))}${q.count > 3 ? '…' : ''}</span></td>
+        <td>${dur(q.plannedMs)}</td><td>${q.running ? 'running ' + dur(q.actualMs) : `<b>${dur(q.actualMs)}</b>${q.stoppedEarly ? ' <span style="color:var(--muted)">(stopped early)</span>' : ''}`}</td>
+        <td>${q.inMs != null ? `${hm(q.inFirst)}–${hm(q.inLast)} · <b>${dur(q.inMs)}</b>` : '–'}</td>
+        <td>${q.snoozes ? `${q.snoozes}× · +${q.snoozeMin} min` : '–'}${q.addMin ? ` · +${q.addMin} min added` : ''}</td>
+        <td>${q.w3n ? `${hm(q.w3first)}${q.w3last !== q.w3first ? '–' + hm(q.w3last) : ''} · <b>${dur(q.outMs)}</b>${q.missing.length ? ` · <span style="color:var(--warn)">${q.missing.length} expected not weighed</span>` : ''}${q.extra.length ? ` · ${q.extra.length} not expected` : ''}` : (q.running ? '–' : 'not yet')}</td></tr>`).join('')}</tbody></table></div>
+  </div>`;
+}
+// typical time for a whole batch, plus time per sample
+function batchTime(arr, msKey, nKey) {
+  const v = arr.filter(z => z[msKey] != null && z[nKey] > 0);
+  if (!v.length) return '–';
+  const ms = median(v.map(z => z[msKey])), per = median(v.filter(z => z[nKey] > 1).map(z => z[msKey] / (z[nKey] - 1)));
+  return `<b>${dur(ms)}</b>${per != null ? ` <span style="color:var(--muted)">(~${fmtMin(per)} per sample)</span>` : ''}`;
+}
+function showBatchTip(el, cx, cy) {
+  const q = batchList(-Infinity, Infinity, Date.now()).find(z => z.id === el.dataset.b); if (!q) return;
+  tip.innerHTML = `<h3><i class="sw" style="width:10px;background:${q.test.color}"></i>${esc(q.section)} · ${esc(q.test.key)}</h3>
+    <table><tr><td>Started</td><td><b>${when(q.start)}</b></td></tr>
+      <tr><td>Planned</td><td>${dur(q.plannedMs)} (ready ${hm(q.start + q.plannedMs)})</td></tr>
+      <tr><td>${q.running ? 'In so far' : 'Taken out'}</td><td><b>${q.running ? dur(q.actualMs) : when(q.end) + ' · ' + dur(q.actualMs)}</b></td></tr>
+      ${q.snoozes ? `<tr><td>Snoozed</td><td>${q.snoozes}× · +${q.snoozeMin} min</td></tr>` : ''}
+      <tr><td>In the batch</td><td><b>${q.count} of ${q.capacity}</b> (${q.w3n ? 'confirmed by W3' : 'expected, no W3 yet'})</td></tr>
+      ${q.inMs != null ? `<tr><td>Weigh-in</td><td>${hm(q.inFirst)}–${hm(q.inLast)} · <b>${dur(q.inMs)}</b> for ${q.inN}</td></tr>` : ''}
+      ${q.idleMs != null ? `<tr><td>Waited to go in</td><td>${dur(q.idleMs)} (last W2 → start)</td></tr>` : ''}
+      ${q.w3n ? `<tr><td>Weigh-out</td><td>${hm(q.w3first)}–${hm(q.w3last)} · <b>${dur(q.outMs)}</b> for ${q.w3n}</td></tr>` : ''}
+      ${q.cycleMs != null ? `<tr><td>Whole cycle</td><td><b>${dur(q.cycleMs)}</b> (first W1 → last W3)</td></tr>` : ''}</table>
+    <div class="dur">${q.w3n ? `<b>Confirmed by W3:</b> ${esc(q.confirmed.join(', '))}` : `<b>Expected:</b> ${esc(q.expected.join(', ')) || 'none were waiting'}`}
+      ${q.w3n && q.missing.length ? `<br><b>Expected but no W3 here:</b> ${esc(q.missing.join(', '))}` : ''}
+      ${q.extra.length ? `<br><b>Not expected but weighed after this batch:</b> ${esc(q.extra.join(', '))}` : ''}</div>`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = cx + 14, top = cy + 14;
+  if (left + tw > innerWidth - 8) left = cx - tw - 14;
+  if (top + th > innerHeight - 8) top = cy - th - 14;
+  tip.style.left = Math.max(8, left) + 'px'; tip.style.top = Math.max(8, top) + 'px';
+}
+
 function stepsFor(list, eq, t0, t1, now) {
   const ev = [];
   list.filter(j => j.w2 && j.test.eq === eq).forEach(j => { ev.push([j.w2.t, 1]); ev.push([j.w3 ? j.w3.t : now, -1]); });
@@ -417,7 +571,14 @@ function wire() {
     const k = b.dataset.test; V.hidden.has(k) ? V.hidden.delete(k) : V.hidden.add(k); render(); });
   const g = document.getElementById('group'); if (g) g.onchange = () => { V.group = g.value; store.set('dash-group', V.group); render(); };
   const r = document.getElementById('refresh'); if (r) r.onclick = load;
-  root.querySelectorAll('.hit').forEach(el => {
+  root.querySelectorAll('.hit[data-b]').forEach(el => {
+    el.addEventListener('mousemove', e => showBatchTip(el, e.clientX, e.clientY));
+    el.addEventListener('mouseleave', () => tip.hidden = true);
+    el.addEventListener('click', e => showBatchTip(el, e.clientX, e.clientY));
+    el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showBatchTip(el, r.left + 20, r.bottom); });
+    el.addEventListener('blur', () => tip.hidden = true);
+  });
+  root.querySelectorAll('.hit[data-j]').forEach(el => {
     el.addEventListener('mousemove', e => showTip(el, e.clientX, e.clientY));
     el.addEventListener('mouseleave', () => tip.hidden = true);
     el.addEventListener('click', e => showTip(el, e.clientX, e.clientY));

@@ -118,7 +118,7 @@
 
 <script>
 /* ====== SETTINGS ====== */
-const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', branch: 'main', data: 'data.json', ts: 'timestamps.json' };
+const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', branch: 'main', data: 'data.json', ts: 'timestamps.json', log: 'timerlog.json' };
 // Suggested times in minutes (the worker can change them on every start)
 const DEFAULT_MIN = { MC: 60, VM: 7, ASH: 60 };
 // The four sections: which tests they take and how many samples fit (the order is the order workers fill them)
@@ -262,21 +262,81 @@ function tidy() {
   if (S.batches.length !== before) saveBatches();
 }
 
+/* ---------- timerlog.json: a permanent record of every batch ----------
+   { "batches": { "<id>": { section, test, capacity, samples, plannedMin, started, ready, events, takenOut, actualMin, stoppedEarly } } }
+   Kept on this device until GitHub has it, so nothing is lost if the internet drops. */
+const isoLocal = ms => { const d = new Date(ms), off = -d.getTimezoneOffset(), a = Math.abs(off);
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}${off >= 0 ? '+' : '-'}${p2(Math.floor(a / 60))}:${p2(a % 60)}`; };
+let LQ = (() => { try { return JSON.parse(store.get('timer-logq')) || {}; } catch (e) { return {}; } })();
+let logBusy = false, logTimer = null;
+function logEntry(b) {
+  const sec = SECTIONS.find(s => s.id === b.section);
+  return { id: b.id, sectionId: b.section, section: L.en.sec[b.section], test: b.test, testName: TS_NAME[b.test],
+    // expected = the app's oldest-first guess at Start; the dashboard confirms the real batch from the W3 times
+    capacity: sec.tests[b.test], expectedCount: b.samples.length, expected: b.samples, plannedMin: b.planned,
+    started: isoLocal(b.start), ready: isoLocal(b.end),
+    events: (b.events || []).map(e => ({ type: e.type, at: isoLocal(e.at), min: e.min })),
+    takenOut: b.out ? isoLocal(b.out) : null, stoppedEarly: !!b.early,
+    actualMin: b.out ? Math.round((b.out - b.start) / 6000) / 10 : null };
+}
+function logBatch(b) { LQ[b.id] = logEntry(b); store.set('timer-logq', JSON.stringify(LQ)); syncLog(); }
+const b64e = str => { const by = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < by.length; i += 0x8000) bin += String.fromCharCode.apply(null, by.subarray(i, i + 0x8000)); return btoa(bin); };
+const b64d = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), c => c.charCodeAt(0)));
+async function syncLog() {
+  clearTimeout(logTimer); logTimer = null;
+  if (logBusy || !KEY || !Object.keys(LQ).length) return;
+  logBusy = true;
+  const batch = Object.assign({}, LQ);
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.log}`;
+  const hdr = { Authorization: 'Bearer ' + KEY, Accept: 'application/vnd.github+json' };
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const r = await fetch(url + '?ref=' + GH.branch, { cache: 'no-store', headers: hdr });
+      let file = { batches: {} }, sha;
+      if (r.ok) { const m = await r.json(); sha = m.sha;
+        file = m.content ? JSON.parse(b64d(m.content)) : await (await fetch(url + '?ref=' + GH.branch, { cache: 'no-store', headers: { ...hdr, Accept: 'application/vnd.github.raw+json' } })).json(); }
+      else if (r.status !== 404) throw new Error('GitHub ' + r.status);
+      file.batches = file.batches || {};
+      Object.values(batch).forEach(e => { file.batches[e.id] = e; });
+      const body = { message: `timer: ${Object.values(batch).map(e => `${e.section} ${e.testName}`).join(', ')}`, branch: GH.branch,
+                     content: b64e(JSON.stringify(file, null, 1)) };
+      if (sha) body.sha = sha;
+      const w = await fetch(url, { method: 'PUT', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (w.ok) break;
+      if ((w.status === 409 || w.status === 422) && attempt < 4) continue;   // saved elsewhere meanwhile: read again
+      throw new Error('GitHub ' + w.status);
+    }
+    Object.keys(batch).forEach(id => { if (JSON.stringify(LQ[id]) === JSON.stringify(batch[id])) delete LQ[id]; });
+    store.set('timer-logq', JSON.stringify(LQ));
+  } catch (e) { logTimer = setTimeout(syncLog, 30000); }
+  logBusy = false;
+  if (Object.keys(LQ).length && !logTimer) syncLog();
+}
+
 /* ---------- timers ---------- */
 const sectionBatch = id => S.batches.find(b => b.section === id && b.state !== 'out');
 function startBatch(sec, test, minutes) {
   const list = waiting(test).slice(0, sec.tests[test]);
   const now = Date.now();
   S.batches.push({ id: now.toString(36), section: sec.id, test, samples: list, start: now, end: now + minutes * 60000,
-                   planned: minutes, snoozes: 0, snoozeMin: 0, state: 'run' });
+                   planned: minutes, snoozes: 0, snoozeMin: 0, state: 'run', events: [] });
   saveBatches(); unlockAudio(); keepAwake();
+  logBatch(S.batches[S.batches.length - 1]);
 }
-function addTime(b, min) { b.end = Math.max(b.end, Date.now()) + min * 60000; saveBatches(); }
+function addTime(b, min) {
+  b.end = Math.max(b.end, Date.now()) + min * 60000; (b.events = b.events || []).push({ type: 'add', at: Date.now(), min });
+  saveBatches(); logBatch(b);
+}
 function snooze(b, min) {
-  b.end = Date.now() + min * 60000; b.state = 'run'; b.snoozes++; b.snoozeMin += min; saveBatches();
+  b.end = Date.now() + min * 60000; b.state = 'run'; b.snoozes++; b.snoozeMin += min;
+  (b.events = b.events || []).push({ type: 'snooze', at: Date.now(), min });
+  saveBatches(); logBatch(b);
   stopSound(); toast(T().snoozedTo(hm(b.end)));
 }
-function takeOut(b) { b.state = 'out'; b.out = Date.now(); saveBatches(); stopSound(); tidy(); }
+function takeOut(b) {
+  b.early = Date.now() < b.end; b.state = 'out'; b.out = Date.now();
+  saveBatches(); logBatch(b); stopSound(); tidy();
+}
 
 /* ---------- alarm sound, vibration, screen awake ---------- */
 let AC = null, soundTimer = null;
@@ -488,7 +548,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.sheet) {
   try { const c = JSON.parse(store.get('timer-cache')); if (c) { S.file = c.f; S.ts = c.t; S.loaded = c.at; } } catch (e) {}
 })();
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
-render(); load();
+render(); load(); setTimeout(syncLog, 2000);
 if (S.batches.some(b => b.state !== 'out')) keepAwake();
 setInterval(tick, 1000);
 setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000);

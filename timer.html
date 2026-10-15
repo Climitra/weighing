@@ -94,6 +94,15 @@
   .danger { background: var(--err) !important; color: #fff !important; border: 0 !important; }
   .goin { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
   .goin b { display: block; margin-bottom: 6px; }
+  .pick { padding: 9px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); font-weight: 700;
+          font-variant-numeric: tabular-nums; min-width: 64px; }
+  .pick[aria-pressed="true"] { background: var(--c); border-color: var(--c); color: #fff; }
+  .pick[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+  .pick .x { margin-left: 6px; opacity: .8; }
+  .addrow { display: flex; gap: 8px; margin-top: 10px; }
+  .addrow input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-weight: 700; text-transform: uppercase; }
+  .addrow button { border: 0; border-radius: 10px; padding: 10px 14px; background: var(--ink); color: #fff; font-weight: 700; }
+  .quick { display: flex; gap: 14px; margin-top: 6px; }
   .warnbox { background: #fff1b8; color: #7a5300; border-radius: 10px; padding: 10px 12px; font-weight: 700; margin-top: 10px; }
 
   /* alarm */
@@ -143,7 +152,11 @@ const L = {
     nothingWaiting: 'Nothing waiting.', nothingOut: 'Nothing waiting for W3.', next: s => `next: ${s}`, full: 'all sections busy',
     startIn: s => `Start ${s}`, chooseTest: 'Which test is going in?', timeLbl: 'Timer', h: 'h', m: 'min',
     suggested: m => `Suggested: ${fmtDur(m)}`, resetSugg: 'Back to suggested time',
-    goesIn: (n, cap) => `Going in (${n} of max ${cap}), oldest first:`, extra: n => `${n} more will stay waiting for the next batch.`,
+    goesIn: (n, cap) => `Going in: ${n} of max ${cap}`, extra: n => `${n} more will stay waiting for the next batch.`,
+    pickHelp: 'Oldest are ticked. Tap a code to take it out or put it back.', addPh: 'Add a code, e.g. T240', add: 'Add',
+    oldest: n => `Tick oldest ${n}`, clear: 'Untick all', full: cap => `Only ${cap} fit. Untick one first.`,
+    notWaiting: c => `${c} added (it has no W2 yet).`, already: c => `${c} is already in another batch.`,
+    editInside: 'Tap ✕ to remove a code that is not inside. Add one that is.', removed: c => `${c} removed.`,
     noneWaiting: 'No samples with W2 are waiting for this test. You can still start the timer.',
     start: 'Start timer', cancel: 'Cancel', close: 'Close',
     running: 'Running', addTime: 'Add time', stopEarly: 'Stop early', confirmStop: 'Tap again to stop',
@@ -162,7 +175,11 @@ const L = {
     nothingWaiting: 'કંઈ બાકી નથી.', nothingOut: 'W3 માટે કંઈ બાકી નથી.', next: s => `હવે: ${s}`, full: 'બધા વિભાગ ચાલુ છે',
     startIn: s => `${s} શરૂ કરો`, chooseTest: 'કયો ટેસ્ટ અંદર જાય છે?', timeLbl: 'ટાઇમર', h: 'કલાક', m: 'મિનિટ',
     suggested: m => `સૂચવેલ: ${fmtDur(m)}`, resetSugg: 'સૂચવેલ સમય પર પાછા',
-    goesIn: (n, cap) => `અંદર જશે (${n}, વધુમાં વધુ ${cap}), જૂના પહેલા:`, extra: n => `${n} બીજા આગલા બેચ માટે બાકી રહેશે.`,
+    goesIn: (n, cap) => `અંદર જશે: ${n} (વધુમાં વધુ ${cap})`, extra: n => `${n} બીજા આગલા બેચ માટે બાકી રહેશે.`,
+    pickHelp: 'જૂના પસંદ કરેલા છે. કોડ કાઢવા કે પાછો મૂકવા તેના પર ટેપ કરો.', addPh: 'કોડ ઉમેરો, દા.ત. T240', add: 'ઉમેરો',
+    oldest: n => `જૂના ${n} પસંદ કરો`, clear: 'બધા કાઢો', full: cap => `ફક્ત ${cap} જ આવે છે. પહેલા એક કાઢો.`,
+    notWaiting: c => `${c} ઉમેર્યો (હજી W2 નથી).`, already: c => `${c} બીજા બેચમાં છે.`,
+    editInside: 'અંદર ન હોય તે કોડ ✕ થી કાઢો. અંદર હોય તે ઉમેરો.', removed: c => `${c} કાઢ્યો.`,
     noneWaiting: 'આ ટેસ્ટ માટે W2 વાળા કોઈ સેમ્પલ બાકી નથી. છતાં ટાઇમર શરૂ કરી શકો છો.',
     start: 'ટાઇમર શરૂ કરો', cancel: 'રદ કરો', close: 'બંધ કરો',
     running: 'ચાલુ', addTime: 'સમય ઉમેરો', stopEarly: 'વહેલું બંધ કરો', confirmStop: 'બંધ કરવા ફરી ટેપ કરો',
@@ -315,8 +332,8 @@ async function syncLog() {
 
 /* ---------- timers ---------- */
 const sectionBatch = id => S.batches.find(b => b.section === id && b.state !== 'out');
-function startBatch(sec, test, minutes) {
-  const list = waiting(test).slice(0, sec.tests[test]);
+function startBatch(sec, test, minutes, chosen) {
+  const list = chosen ? chosen.slice(0, sec.tests[test]) : waiting(test).slice(0, sec.tests[test]);
   const now = Date.now();
   S.batches.push({ id: now.toString(36), section: sec.id, test, samples: list, start: now, end: now + minutes * 60000,
                    planned: minutes, snoozes: 0, snoozeMin: 0, state: 'run', events: [] });
@@ -421,8 +438,13 @@ function sheetHTML() {
       <h3>${esc(secName(sec.id))} · ${esc(t.test[b.test])}</h3>
       <p class="meta">${esc(t.started(hm(b.start)))} · ${esc(t.readyAt(hm(b.end)))}${b.snoozes ? ' · ' + esc(t.snoozed(b.snoozes, b.snoozeMin)) : ''}</p>
       <div class="readout" id="sheet-cd" style="margin:10px 0">${countdown(b.end - Date.now())}</div>
-      <div class="goin"><b>${esc(t.inside)} (${b.samples.length})</b>
-        <div class="codes">${b.samples.map(c => `<span class="code">${esc(c)}</span>`).join('') || '–'}</div></div>
+      <div class="goin"><b>${esc(t.inside)} (${b.samples.length} / ${sec.tests[b.test]})</b>
+        <p class="meta" style="margin:0 0 8px">${esc(t.editInside)}</p>
+        <div class="codes">${b.samples.map(c => `<button class="pick" aria-pressed="true" data-act="rm-inside" data-code="${esc(c)}">${esc(c)}<span class="x" aria-hidden="true">✕</span></button>`).join('') || '–'}</div>
+        ${waiting(b.test).length ? `<div class="codes" style="margin-top:8px">${waiting(b.test).slice(0, 24).map(c =>
+            `<button class="pick" aria-pressed="false" style="text-decoration:none" data-act="add-inside" data-code="${esc(c)}">+ ${esc(c)}</button>`).join('')}</div>` : ''}
+        <div class="addrow"><input id="newcode" placeholder="${esc(t.addPh)}" autocomplete="off" autocapitalize="characters"><button data-act="addcode">${esc(t.add)}</button></div>
+      </div>
       <p style="font-weight:700;margin:14px 0 6px">${esc(t.addTime)}</p>
       <div class="adj" style="grid-template-columns:repeat(3,1fr)">${SNOOZE.map(m => `<button data-act="add" data-min="${m}">+${m} ${esc(t.m)}</button>`).join('')}</div>
       <div class="btnrow"><button class="secondary" data-act="close">${esc(t.close)}</button>
@@ -431,7 +453,8 @@ function sheetHTML() {
   }
   // start a new batch
   const tests = Object.keys(sec.tests), test = sh.test || tests[0];
-  const list = waiting(test), cap = sec.tests[test], go = list.slice(0, cap);
+  const list = waiting(test), cap = sec.tests[test];
+  const shown = list.concat(sh.extra.filter(c => !list.includes(c)));          // waiting codes + ones typed in
   return `<div class="modal" data-act="close-bg"><div class="sheet" style="${cvar(test)}" role="dialog" aria-modal="true">
     <h3>${esc(t.startIn(secName(sec.id)))}</h3>
     ${tests.length > 1 ? `<p class="meta">${esc(t.chooseTest)}</p><div class="seg">${tests.map(k =>
@@ -443,9 +466,14 @@ function sheetHTML() {
     </div>
     <div class="adj">${[-5, -1, 1, 5, 10, 30].map(d => `<button data-act="adj" data-d="${d}">${d > 0 ? '+' : '−'}${Math.abs(d)}</button>`).join('')}</div>
     ${sh.min !== DEFAULT_MIN[test] ? `<button class="link" data-act="sugg">${esc(t.resetSugg)}</button>` : ''}
-    ${go.length ? `<div class="goin"><b>${esc(t.goesIn(go.length, cap))}</b><div class="codes">${go.map(c => `<span class="code">${esc(c)}</span>`).join('')}</div>
-        ${list.length > cap ? `<p class="meta" style="margin:8px 0 0">${esc(t.extra(list.length - cap))}</p>` : ''}</div>`
-      : `<div class="warnbox">${esc(t.noneWaiting)}</div>`}
+    <div class="goin"><b>${esc(t.goesIn(sh.sel.length, cap))}</b>
+      ${shown.length ? `<p class="meta" style="margin:0 0 8px">${esc(t.pickHelp)}</p>
+        <div class="codes">${shown.map(c => `<button class="pick" data-act="toggle" data-code="${esc(c)}" aria-pressed="${sh.sel.includes(c)}">${esc(c)}</button>`).join('')}</div>
+        <div class="quick"><button class="link" data-act="oldest">${esc(t.oldest(Math.min(cap, shown.length)))}</button><button class="link" data-act="clearsel">${esc(t.clear)}</button></div>`
+        : `<div class="warnbox" style="margin-top:0">${esc(t.noneWaiting)}</div>`}
+      <div class="addrow"><input id="newcode" placeholder="${esc(t.addPh)}" autocomplete="off" autocapitalize="characters"><button data-act="addcode">${esc(t.add)}</button></div>
+      ${shown.length - sh.sel.length > 0 ? `<p class="meta" style="margin:8px 0 0">${esc(t.extra(shown.length - sh.sel.length))}</p>` : ''}
+    </div>
     <div class="btnrow"><button class="secondary" data-act="close">${esc(t.cancel)}</button>
       <button class="primary" data-act="start" ${sh.min < 1 ? 'disabled' : ''}>${esc(t.start)}</button></div>
   </div></div>`;
@@ -491,7 +519,7 @@ function tick() {
   const now = Date.now();
   const sig = S.batches.map(b => b.id + b.state + (b.end <= now)).join() + (S.sheet ? JSON.stringify(S.sheet) : '') + S.armed;
   if (sig !== lastSig || document.querySelector('.alarm')) {
-    if (!document.activeElement || !['hh', 'mm', 'key'].includes(document.activeElement.id)) { lastSig = sig; render(); return; }
+    if (!document.activeElement || !['hh', 'mm', 'key', 'newcode'].includes(document.activeElement.id)) { lastSig = sig; render(); return; }
   }
   document.getElementById('clock') && (document.getElementById('clock').textContent = hm(now));
   document.querySelectorAll('.tile.run').forEach(el => {
@@ -502,6 +530,30 @@ function tick() {
   });
   const cd = document.getElementById('sheet-cd');
   if (cd && S.sheet) { const b = sectionBatch(S.sheet.sec); if (b) cd.textContent = countdown(b.end - now); }
+}
+
+/* ---------- adding a code by hand ---------- */
+function addCode() {
+  const inp = document.getElementById('newcode'); if (!inp) return;
+  const c = inp.value.trim().toUpperCase().replace(/\s+/g, ''); if (!c) return;
+  const sh = S.sheet, running = sectionBatch(sh.sec), test = running ? running.test : sh.test;
+  const cap = SECTIONS.find(s => s.id === sh.sec).tests[test];
+  const other = S.batches.find(b => b !== running && b.test === test && b.samples.includes(c) && b.state !== 'out');
+  if (other) { toast(T().already(c)); return; }
+  if (running) {
+    if (running.samples.includes(c)) return;
+    if (running.samples.length >= cap) { toast(T().full(cap)); return; }
+    running.samples.push(c); (running.events = running.events || []).push({ type: 'edit', at: Date.now(), min: 0 });
+    saveBatches(); logBatch(running);
+  } else {
+    if (sh.sel.includes(c)) return;
+    if (sh.sel.length >= cap) { toast(T().full(cap)); return; }
+    if (!waiting(test).includes(c) && !sh.extra.includes(c)) sh.extra.push(c);
+    sh.sel.push(c);
+  }
+  if (stateOf(c, test) !== 'w2') toast(T().notWaiting(c));
+  render();
+  const again = document.getElementById('newcode'); if (again) again.focus();
 }
 
 /* ---------- taps ---------- */
@@ -520,15 +572,42 @@ document.addEventListener('click', e => {
     case 'sound': unlockAudio(); setTimeout(render, 200); break;
     case 'open': {
       const sec = SECTIONS.find(s => s.id === el.dataset.sec), first = Object.keys(sec.tests)[0];
-      S.sheet = { sec: sec.id, test: first, min: DEFAULT_MIN[first] }; S.armed = null; render(); break;
+      S.sheet = { sec: sec.id, test: first, min: DEFAULT_MIN[first], sel: waiting(first).slice(0, sec.tests[first]), extra: [] };
+      S.armed = null; render(); break;
     }
     case 'close': case 'close-bg': S.sheet = null; S.armed = null; render(); break;
-    case 'pick': sh.test = el.dataset.test; sh.min = DEFAULT_MIN[sh.test]; render(); break;
+    case 'pick': {
+      const sec = SECTIONS.find(s => s.id === sh.sec);
+      sh.test = el.dataset.test; sh.min = DEFAULT_MIN[sh.test]; sh.sel = waiting(sh.test).slice(0, sec.tests[sh.test]); sh.extra = []; render(); break;
+    }
+    case 'toggle': {             // tick / untick a code on the start screen
+      const c = el.dataset.code, cap = SECTIONS.find(s => s.id === sh.sec).tests[sh.test];
+      if (sh.sel.includes(c)) sh.sel = sh.sel.filter(x => x !== c);
+      else if (sh.sel.length >= cap) { toast(T().full(cap)); break; }
+      else sh.sel.push(c);
+      render(); break;
+    }
+    case 'oldest': { const cap = SECTIONS.find(s => s.id === sh.sec).tests[sh.test];
+      sh.sel = waiting(sh.test).concat(sh.extra).slice(0, cap); render(); break; }
+    case 'clearsel': sh.sel = []; render(); break;
+    case 'addcode': addCode(); break;
+    case 'rm-inside': {          // remove a code from a running batch
+      const b = sectionBatch(sh.sec); if (!b) break;
+      b.samples = b.samples.filter(x => x !== el.dataset.code); (b.events = b.events || []).push({ type: 'edit', at: Date.now(), min: 0 });
+      saveBatches(); logBatch(b); toast(T().removed(el.dataset.code)); render(); break;
+    }
+    case 'add-inside': {         // add a waiting code to a running batch
+      const b = sectionBatch(sh.sec); if (!b) break;
+      const cap = SECTIONS.find(s => s.id === sh.sec).tests[b.test];
+      if (b.samples.length >= cap) { toast(T().full(cap)); break; }
+      b.samples.push(el.dataset.code); (b.events = b.events || []).push({ type: 'edit', at: Date.now(), min: 0 });
+      saveBatches(); logBatch(b); render(); break;
+    }
     case 'adj': sh.min = Math.max(0, readTime() + +el.dataset.d); render(); break;
     case 'sugg': sh.min = DEFAULT_MIN[sh.test]; render(); break;
     case 'start': {
       sh.min = readTime(); if (sh.min < 1) return;
-      startBatch(SECTIONS.find(s => s.id === sh.sec), sh.test, sh.min); S.sheet = null; render(); break;
+      startBatch(SECTIONS.find(s => s.id === sh.sec), sh.test, sh.min, sh.sel); S.sheet = null; render(); break;
     }
     case 'add': { const b = sectionBatch(sh.sec); if (b) addTime(b, +el.dataset.min); render(); break; }
     case 'stop-early': {
@@ -541,7 +620,10 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('change', e => { if ((e.target.id === 'hh' || e.target.id === 'mm') && S.sheet) { S.sheet.min = readTime(); render(); } });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.sheet) { S.sheet = null; render(); } });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && S.sheet) { S.sheet = null; render(); }
+  if (e.key === 'Enter' && e.target.id === 'newcode') addCode();
+});
 
 /* ---------- start ---------- */
 (function fromCache() {

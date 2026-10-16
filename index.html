@@ -57,6 +57,15 @@
   .chip.prog { background: var(--c-bg); color: var(--c); border-color: var(--c); }
   .chip.done { background: var(--c); color: #fff; border-color: var(--c); }
 
+  /* results above the limit */
+  .sample.flag { background: #fdecea; border: 2px solid var(--err); }
+  .chip.flag { background: var(--err); color: #fff; border-color: var(--err); font-weight: 700; }
+  .flagnote { color: var(--err); font-weight: 700; font-size: .95rem; margin-top: 6px; }
+  .testbtn.flag { background: #fdecea; border-color: var(--err); border-left-color: var(--err); }
+  .testbtn.flag .state { color: var(--err); font-weight: 700; }
+  .result.flag { background: #fdecea; border-color: var(--err); color: var(--err); }
+  .result.flag b, .result.flag span { color: var(--err) !important; }
+
   .back { background: none; border: 0; padding: 8px 0; font-weight: 700; color: var(--muted); font-size: 1rem; }
   .title { font-size: 1.9rem; margin: 4px 0 2px; color: var(--c, var(--ink)); }
   .sub { color: var(--muted); margin: 0 0 16px; }
@@ -188,6 +197,9 @@ const L = {
     nextW2: 'Next: add sample and weigh (W2)',
     done: 'Done', doneP: p => `Done: ${p}`,
     vmWait: 'Shows after Moisture is done',
+    flagState: (p, lim) => `⚠ High: ${p} (limit ${lim} %)`,
+    flagNote: (names) => `⚠ Above limit: ${names}`,
+    flagSaved: (n, p, lim) => `⚠ ${n} is high: ${p}. Limit is ${lim} %. Tell the supervisor.`,
     tmQ: 'Does this sample need Total Moisture?', no: 'No', yes: 'Yes',
     stepOf: n => `Step ${n} of 3`,
     correcting: (n, l) => `Correcting W${n}: ${l}`,
@@ -251,6 +263,9 @@ const L = {
     nextW2: 'હવે: સેમ્પલ નાખીને વજન કરો (W2)',
     done: 'પૂરું', doneP: p => `પૂરું: ${p}`,
     vmWait: 'ભેજ પૂરું થયા પછી દેખાશે',
+    flagState: (p, lim) => `⚠ વધારે: ${p} (મર્યાદા ${lim} %)`,
+    flagNote: (names) => `⚠ મર્યાદા કરતાં વધારે: ${names}`,
+    flagSaved: (n, p, lim) => `⚠ ${n} વધારે છે: ${p}. મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
     tmQ: 'શું આ સેમ્પલ માટે કુલ ભેજ (Total Moisture) કરવાનું છે?', no: 'ના', yes: 'હા',
     stepOf: n => `પગલું ${n} / 3`,
     correcting: (n, l) => `W${n} સુધારો: ${l}`,
@@ -635,6 +650,10 @@ function parseW(str) {
   const v = Number(s);
   return v > 0 ? v : null;
 }
+// Results above these limits (%) are flagged red in the app and the Excel download.
+const FLAG = { VM: 17.5, ASH: 15 };
+function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct > FLAG[k]; }
+function flagsOf(s) { return ORDER.filter(k => s.tests[k].required && isFlag(k, s.tests[k])); }
 function pctLine(k, st) {
   if (isNum(st.pct)) return `${st.pct.toFixed(2)} %`;
   return k === 'VM' ? T().vmWait : '';
@@ -675,7 +694,8 @@ function header() {
 function chip(k, st) {
   const t = T(), short = t.short[k] || S.tests[k].label;
   let cls = '', txt = short;
-  if (st.done === 3) { cls = 'done'; txt = short + ' ✓'; }
+  if (st.done === 3 && isFlag(k, st)) { cls = 'flag'; txt = `${short} ${st.pct.toFixed(2)} % ⚠`; }
+  else if (st.done === 3) { cls = 'done'; txt = short + ' ✓'; }
   else if (st.done === 2) { cls = 'prog'; txt = `${short}: ${t.chipIn(heat(k))}`; }
   else if (st.done === 1) { cls = 'prog'; txt = `${short}: ${t.chipStep2}`; }
   return `<span class="chip ${cls}" style="${cvar(k)}">${esc(txt)}</span>`;
@@ -689,7 +709,7 @@ function listHTML() {
   if (!list.length)
     return `<div class="empty">${esc(q ? T().noMatch(S.query) : S.data.samples.length ? T().allDone : T().noCodes)}</div>`;
   return list.map(s => `
-    <button class="sample" data-act="open-sample" data-code="${esc(s.code)}">
+    <button class="sample${flagsOf(s).length ? ' flag' : ''}" data-act="open-sample" data-code="${esc(s.code)}">
       <div class="code">${esc(s.code)}</div>${infoHTML(s.code)}
       <div class="chips">${S.order.filter(k => s.tests[k].required).map(k => chip(k, s.tests[k])).join('')}</div>
     </button>`).join('');
@@ -729,13 +749,14 @@ function stateText(k, st) {
   if (st.done === 1) return t.nextW2;
   if (st.done === 2) return t.inHeat(heat(k));
   const p = pctLine(k, st);
+  if (isFlag(k, st)) return t.flagState(p, FLAG[k]);
   return p ? t.doneP(p) : t.done;
 }
 
 function hasValues(st) { return st.w.some(isNum) || isNum(st.pct); }
 function testBtn(s, k) {
   const st = s.tests[k];
-  const card = `<button class="testbtn ${st.done === 3 ? 'done' : ''}" style="${cvar(k)}" data-act="open-test" data-test="${k}">
+  const card = `<button class="testbtn ${st.done === 3 ? 'done' : ''} ${isFlag(k, st) ? 'flag' : ''}" style="${cvar(k)}" data-act="open-test" data-test="${k}">
     <div class="name">${esc(lbl(k))}</div>
     <div class="state">${esc(stateText(k, st))}</div></button>`;
   if (!hasValues(st)) return card;
@@ -756,7 +777,7 @@ function renderSample() {
       ${s.tmRequired ? testBtn(s, tmK) : ''}</div>` : '';
   return `<div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="home">${esc(t.allSamples)}</button>${langBtn()}</div>
-    <h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}
+    <h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}${flagsOf(s).length ? `<div class="flagnote">${esc(t.flagNote(flagsOf(s).map(lbl).join(', ')))}</div>` : ''}
     <p class="sub" style="margin-top:8px">${esc(t.chooseTest)}</p>
     <div class="list">${main}</div>${tm}`;
 }
@@ -819,7 +840,7 @@ function renderReview() {
     <div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="back-sample">← ${esc(s.code)}</button>${langBtn()}</div>
     <h2 class="title">${esc(lbl(k))}</h2>${infoHTML(s.code)}
-    <div class="result"><span>${esc(t.result)}</span><b>${esc(pctLine(k, st) || t.done)}</b></div>
+    <div class="result ${isFlag(k, st) ? 'flag' : ''}"><span>${esc(t.result)}</span><b>${esc(pctLine(k, st) || t.done)}</b></div>${isFlag(k, st) ? `<div class="flagnote">${esc(t.flagState(pctLine(k, st), FLAG[k]))}</div>` : ''}
     <div class="prev">${st.w.map((w, i) => `
       <div class="row"><span>${esc(wLabel(k, i))} (W${i + 1})<br><b>${fmt(w)} g</b></span>
       <button class="link" data-act="edit" data-step="${i + 1}">${esc(t.correct)}</button></div>`).join('')}</div>
@@ -872,8 +893,9 @@ function renderSetup() {
 
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
-        <p class="sub" style="margin:4px 0 8px">Download every sample as a spreadsheet file (opens in Excel or Google Sheets), in the same columns as the old logging sheet.</p>
-        <button class="secondary" data-act="export" style="width:100%">⤓ Download results (.csv)</button></div>
+        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. VM above 17.5 % and Ash above 15 % are marked red.</p>
+        <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = above limit)</button>
+        <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
       <div class="row" style="display:block"><b>Lab timeline</b>
         <p class="sub" style="margin:4px 0 8px">See what ran in the oven and furnace, and when, on one chart. Best on a computer.</p>
         <a class="secondary" href="dashboard.html" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;color:inherit;padding:18px;border:1px solid var(--line);border-radius:14px;font-weight:700">Open lab timeline</a></div>
@@ -918,18 +940,105 @@ function addCodes() {
   toast(`Added ${fresh.length} code${fresh.length > 1 ? 's' : ''}: ${fresh[0]}${fresh.length > 1 ? ' … ' + fresh[fresh.length - 1] : ''}`, true);
   render();
 }
+// One table for both downloads. Each cell: { v, flag } ; flag = red highlight.
+function resultsTable() {
+  const groups = [['', 1], ['Sample info', 3], ...ORDER.map(k => [TESTS[k].label, 4]), ['Tracking', 4]];
+  const head2 = ['Code', 'Sample Name', 'Date', 'Supplier', ...ORDER.flatMap(() => ['W1', 'W2', 'W3', 'Percentage']),
+                 'TM Required', 'Status', 'Last updated', 'Flag'];
+  const rows = S.data.samples.map(s => {
+    const n = nameOf(s.code) || {}, fl = flagsOf(s);
+    return [{ v: s.code, flag: fl.length > 0 }, { v: n.name || '' },
+      { v: n.date ? n.date.replace(/^(\d{4})-(\d{2})-(\d{2}).*/, '$3/$2/$1') : '' }, { v: n.supplier || '' },
+      ...ORDER.flatMap(k => { const t = s.tests[k];
+        return [...t.w.map(v => ({ v: isNum(v) ? v : '' })), { v: isNum(t.pct) ? t.pct : '', flag: isFlag(k, t) }]; }),
+      { v: s.tmRequired ? 'Y' : '' }, { v: s.status }, { v: s.last || '' },
+      { v: fl.map(k => `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
+  });
+  return { groups, head2, rows };
+}
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const today = () => new Date().toISOString().slice(0, 10);
 function exportCSV() {
   const q = v => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  const head1 = ['', 'Sample info', '', '', ...ORDER.flatMap(k => [TESTS[k].label, '', '', '']), 'Tracking', '', ''];
-  const head2 = ['Code', 'Sample Name', 'Date', 'Supplier', ...ORDER.flatMap(() => ['W1', 'W2', 'W3', 'Percentage']), 'TM Required', 'Status', 'Last updated'];
-  const rows = S.data.samples.map(s => { const n = nameOf(s.code) || {}; return [s.code, n.name || '', n.date ? n.date.replace(/^(\d{4})-(\d{2})-(\d{2}).*/, '$3/$2/$1') : '', n.supplier || '',
-    ...ORDER.flatMap(k => [...s.tests[k].w.map(v => isNum(v) ? v : ''), isNum(s.tests[k].pct) ? s.tests[k].pct : '']),
-    s.tmRequired ? 'Y' : '', s.status, s.last || '']; });
-  const csv = '\ufeff' + [head1, head2, ...rows].map(r => r.map(q).join(',')).join('\r\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = `proximate-results-${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  const { groups, head2, rows } = resultsTable();
+  const head1 = groups.flatMap(([g, n]) => [g, ...Array(n - 1).fill('')]);
+  const csv = '﻿' + [head1, head2, ...rows.map(r => r.map(c => c.v))].map(r => r.map(q).join(',')).join('\r\n');
+  download(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `proximate-results-${today()}.csv`);
+}
+
+/* ---- tiny .xlsx writer (no library needed): red cells for flagged results ---- */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zip(files) {   // files: [{name, text}] — stored, not compressed
+  const enc = new TextEncoder(), parts = [], cen = []; let off = 0;
+  files.forEach(f => {
+    const name = enc.encode(f.name), data = enc.encode(f.text), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(h.buffer), name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+    c.setUint32(42, off, true);
+    cen.push(new Uint8Array(c.buffer), name);
+    off += 30 + name.length + data.length;
+  });
+  const size = cen.reduce((a, b) => a + b.length, 0), e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, size, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...cen, new Uint8Array(e.buffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+function exportXLSX() {
+  const { groups, head2, rows } = resultsTable();
+  const x = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const col = i => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; };
+  // styles: 0 normal, 1 header, 2 red flagged value, 3 number 2dp, 4 red flagged number
+  const cell = (r, i, v, st) => {
+    const ref = col(i) + r;
+    if (typeof v === 'number') return `<c r="${ref}" s="${st === 2 ? 4 : st === 1 ? 1 : 3}"><v>${v}</v></c>`;
+    if (v === '' || v == null) return st ? `<c r="${ref}" s="${st}"/>` : '';
+    return `<c r="${ref}" s="${st}" t="inlineStr"><is><t xml:space="preserve">${x(v)}</t></is></c>`;
+  };
+  let r1 = [], c = 0, merges = [];
+  groups.forEach(([g, n]) => { r1.push(cell(1, c, g, 1)); for (let k = 1; k < n; k++) r1.push(cell(1, c + k, '', 1)); if (n > 1) merges.push(`${col(c)}1:${col(c + n - 1)}1`); c += n; });
+  const lines = [`<row r="1">${r1.join('')}</row>`, `<row r="2">${head2.map((h, i) => cell(2, i, h, 1)).join('')}</row>`,
+    ...rows.map((row, ri) => `<row r="${ri + 3}">${row.map((d, i) => cell(ri + 3, i, d.v, d.flag ? 2 : 0)).join('')}</row>`)];
+  const widths = head2.map((h, i) => i === 1 ? 26 : i === head2.length - 1 ? 22 : i === head2.length - 2 ? 30 : i < 4 ? 12 : 10);
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0"><pane xSplit="1" ySplit="2" topLeftCell="B3" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>
+<cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>
+<sheetData>${lines.join('')}</sheetData>
+${merges.length ? `<mergeCells count="${merges.length}">${merges.map(m => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
+</worksheet>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="0.00##"/></numFmts>
+<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFE8ECEF"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD93025"/></patternFill></fill></fills>
+<borders count="1"><border/></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="2" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  download(zip([
+    { name: '[Content_Types].xml', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
+    { name: '_rels/.rels', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Results" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: 'xl/worksheets/sheet1.xml', text: sheet },
+    { name: 'xl/styles.xml', text: styles },
+  ]), `proximate-results-${today()}.xlsx`);
 }
 function parseCSV(text) {
   const rows = []; let row = [], cell = '', inQ = false;
@@ -984,11 +1093,16 @@ function renderModal() {
       </div></div></div>`;
   return `<div class="modal" style="${cvar(k)}"><div class="sheet" role="dialog" aria-modal="true">
       <div class="tick" aria-hidden="true">✓</div>
-      <p class="instr">${esc(savedMsg(m))}</p>
+      <p class="instr">${esc(savedMsg(m))}</p>${flagMsg(m)}
       <div class="btnrow"><button class="primary" data-act="after">${esc(m.next === 'step2' ? t.enterW2 : t.ok)}</button></div>
     </div></div>`;
 }
 
+function flagMsg(m) {
+  if (m.kind !== 's3' && m.kind !== 'corrected') return '';
+  const st = sample(S.code) && sample(S.code).tests[S.test];
+  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
+}
 // Built at display time so it follows the language switch
 function savedMsg(m) {
   const t = T(), k = S.test;
@@ -1189,6 +1303,7 @@ document.addEventListener('click', e => {
     case 'add-codes': addCodes(); break;
     case 'remove-code': if (confirmTap(el)) { enqueue({ action: 'removeCode', code: el.dataset.code, worker: S.worker }); render(); } break;
     case 'export': exportCSV(); break;
+    case 'export-xlsx': exportXLSX(); break;
     case 'import': document.getElementById('csvfile').click(); break;
     case 'name': S.view = 'name'; render(); break;
     case 'save-name': saveName(); break;

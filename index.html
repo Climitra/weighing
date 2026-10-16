@@ -103,6 +103,7 @@
   .live .warn { color: var(--warn); font-weight: 700; }
   .ind { display: inline-block; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .ind.low { background: #fff1b8; color: #7a5300; border: 2px solid #e0b300; }
+  .ind.over { background: #fdecea; color: var(--err); border: 2px solid var(--err); }
   .ind.ok  { background: #dff3e6; color: var(--ok); border: 2px solid var(--ok); }
 
   .prev { margin-top: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
@@ -154,10 +155,11 @@ const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'data.json'
    https://girish-vastrakar.github.io/weighing/#key=YOUR_KEY   (the app saves it and hides it)  */
 
 // Tests, in the order shown. targetSample = sample weight (g) at which W2 turns green.
+// maxSample = the sample (W2 − W1) can't be saved above this weight (g).
 const TESTS = {
-  MC:  { label: 'Moisture',        vessel: 'petri dish',   heat: 'oven',    targetSample: 1 },
-  VM:  { label: 'Volatile Matter', vessel: 'VM crucible',  heat: 'furnace', targetSample: 1 },
-  ASH: { label: 'Ash',             vessel: 'ash crucible', heat: 'furnace', targetSample: 1 },
+  MC:  { label: 'Moisture',        vessel: 'petri dish',   heat: 'oven',    targetSample: 1, maxSample: 1.009 },
+  VM:  { label: 'Volatile Matter', vessel: 'VM crucible',  heat: 'furnace', targetSample: 1, maxSample: 1.009 },
+  ASH: { label: 'Ash',             vessel: 'ash crucible', heat: 'furnace', targetSample: 1, maxSample: 1.009 },
   TM:  { label: 'Total Moisture',  vessel: 'petri dish',   heat: 'oven',    targetSample: 10, optional: true }
 };
 const ORDER = Object.keys(TESTS);
@@ -208,6 +210,9 @@ const L = {
     i2: v => `Add the sample to the ${v} and put it on the balance.`,
     s2: v => `Enter the total weight shown (${v} + sample).`,
     aim: g => ` Aim for about ${g} g of sample. Green means enough.`,
+    aimMax: (g, m) => ` Take ${g} to ${m} g of sample. Green means OK.`,
+    tooMuch: (d, m, x) => `Sample ${d} g is too much. Max ${m} g. Remove ${x} g.`,
+    errMax: m => `Sample is more than ${m} g. Remove some sample and weigh again.`,
     i3: (v, h) => `Take the ${v} out of the ${h}, cool it in the desiccator, and put it on the balance.`,
     wEmpty: v => `Empty ${v}`, wPlus: v => `${cap(v)} + sample`, wAfter: h => `After ${h}`,
     correct: 'Correct', save: 'Save weight', result: 'Result',
@@ -274,6 +279,9 @@ const L = {
     i2: v => `${v}માં સેમ્પલ નાખીને વજન કાંટા પર મૂકો.`,
     s2: v => `કાંટા પર દેખાતું કુલ વજન નાખો (${v} + સેમ્પલ).`,
     aim: g => ` લગભગ ${g} g સેમ્પલ લો. લીલું દેખાય એટલે પૂરતું છે.`,
+    aimMax: (g, m) => ` ${g} થી ${m} g સેમ્પલ લો. લીલું દેખાય એટલે બરાબર.`,
+    tooMuch: (d, m, x) => `સેમ્પલ ${d} g વધારે છે. વધુમાં વધુ ${m} g. ${x} g કાઢો.`,
+    errMax: m => `સેમ્પલ ${m} g કરતાં વધારે છે. થોડું સેમ્પલ કાઢીને ફરી વજન કરો.`,
     i3: (v, h) => `${h}માંથી ${v} બહાર કાઢો, ડેસિકેટરમાં ઠંડું કરો અને વજન કાંટા પર મૂકો.`,
     wEmpty: v => `ખાલી ${v}`, wPlus: v => `${v} + સેમ્પલ`, wAfter: h => `${h} પછી`,
     correct: 'સુધારો', save: 'વજન સેવ કરો', result: 'પરિણામ',
@@ -786,7 +794,7 @@ function renderStep() {
   const t = T(), s = sample(S.code), k = S.test, st = s.tests[k], step = S.step, cfg = S.tests[k];
   const instr = [
     [t.i1(ves(k)), t.s1],
-    [t.i2(ves(k)), t.s2(ves(k)) + (cfg.targetSample ? t.aim(cfg.targetSample) : '')],
+    [t.i2(ves(k)), t.s2(ves(k)) + (cfg.maxSample ? t.aimMax(cfg.targetSample.toFixed(3), cfg.maxSample.toFixed(3)) : cfg.targetSample ? t.aim(cfg.targetSample) : '')],
     [t.i3(ves(k), heat(k)), t.s1]
   ][step - 1];
   const prev = st.w.map((w, i) => (isNum(w) && i !== step - 1) ? `
@@ -818,6 +826,8 @@ function liveText() {
   if (S.step === 2 && isNum(w[0])) {
     const d = v - w[0];
     if (d <= 0) return warn(t.notMoreW1(ves(k), fmt(w[0])));
+    if (cfg.maxSample && overMax(d, cfg.maxSample))
+      return `<span class="ind over">${esc(t.tooMuch(fmt(d), cfg.maxSample.toFixed(3), fmt(d - cfg.maxSample)))}</span>`;
     if (!cfg.targetSample) return esc(t.sampleW(fmt(d)));
     return d < cfg.targetSample
       ? `<span class="ind low">${esc(t.sampleW(fmt(d)))}</span>`
@@ -1193,11 +1203,15 @@ function openTest(k) {
   render();
 }
 
+// Rounded to 4 decimals (the balance) so 1.0090 is allowed and 1.0091 is not
+const overMax = (d, max) => Math.round(d * 10000) > Math.round(max * 10000);
 // Same checks as the sheet script, shown in the worker's language
 function checkWeight(v) {
   const t = T(), k = S.test, w = sample(S.code).tests[k].w.slice();
   w[S.step - 1] = v;
   if (isNum(w[0]) && isNum(w[1]) && w[1] <= w[0]) return S.step === 1 ? t.errW1 : t.errW2(ves(k));
+  const max = S.tests[k].maxSample;
+  if (max && S.step <= 2 && isNum(w[0]) && isNum(w[1]) && overMax(w[1] - w[0], max)) return t.errMax(max.toFixed(3));
   if (isNum(w[2]) && isNum(w[1]) && w[2] > w[1]) return t.errW3hi;
   if (isNum(w[2]) && isNum(w[0]) && w[2] < w[0]) return t.errW3lo(ves(k));
   return '';

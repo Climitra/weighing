@@ -972,9 +972,12 @@ function renderSetup() {
 
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
-        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. VM above 17.5 % and Ash above 15 % are marked red.</p>
+        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 % or negative are marked red.</p>
         <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = above limit or negative)</button>
         <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
+      <div class="row" style="display:block"><b>Results files on GitHub</b>
+        <p class="sub" style="margin:4px 0 8px">results.json, retest.json and retest.csv update by themselves every 15 minutes. Tap to update them now.</p>
+        <button class="secondary" data-act="run-results" style="width:100%">↻ Update results now</button></div>
       <div class="row" style="display:block"><b>Lab timeline</b>
         <p class="sub" style="margin:4px 0 8px">See what ran in the oven and furnace, and when, on one chart. Best on a computer.</p>
         <a class="secondary" href="dashboard.html" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;color:inherit;padding:18px;border:1px solid var(--line);border-radius:14px;font-weight:700">Open lab timeline</a></div>
@@ -1071,6 +1074,17 @@ function zip(files) {   // files: [{name, text}] — stored, not compressed
   e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
   e.setUint32(12, size, true); e.setUint32(16, off, true);
   return new Blob([...parts, ...cen, new Uint8Array(e.buffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+// Start the results job in weighing-data (needs the key to have Actions: Read and write)
+async function runResults(el) {
+  el.disabled = true;
+  try {
+    await gh('POST', `${API}/actions/workflows/results.yml/dispatches`, { ref: 'main' });
+    toast('Updating. Results files are ready in about a minute.', true);
+  } catch (e) {
+    toast(e.code === 'KEY' || e.code === 'NOTFOUND' ? 'The key needs "Actions: Read and write" on weighing-data.'
+      : e.code === 'OFFLINE' ? 'No internet. Try again.' : e.message);
+  } finally { el.disabled = false; }
 }
 function exportXLSX() {
   const { groups, head2, rows } = resultsTable();
@@ -1392,6 +1406,7 @@ document.addEventListener('click', e => {
     case 'remove-code': if (confirmTap(el)) { enqueue({ action: 'removeCode', code: el.dataset.code, worker: S.worker }); render(); } break;
     case 'export': exportCSV(); break;
     case 'export-xlsx': exportXLSX(); break;
+    case 'run-results': runResults(el); break;
     case 'import': document.getElementById('csvfile').click(); break;
     case 'name': S.view = 'name'; render(); break;
     case 'save-name': saveName(); break;

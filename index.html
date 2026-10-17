@@ -205,8 +205,10 @@ const L = {
     done: 'Done', doneP: p => `Done: ${p}`,
     vmWait: 'Shows after Moisture is done',
     flagState: (p, lim) => `⚠ High: ${p} (limit ${lim} %)`,
-    flagNote: (names) => `⚠ Above limit: ${names}`,
+    flagNeg: p => `⚠ Negative: ${p} (not possible, check the weights)`,
+    flagNote: (names) => `⚠ Out of range: ${names}`,
     flagSaved: (n, p, lim) => `⚠ ${n} is high: ${p}. Limit is ${lim} %. Tell the supervisor.`,
+    flagSavedNeg: (n, p) => `⚠ ${n} is negative: ${p}. Check the weights and tell the supervisor.`,
     apprNeed: 'Not in the results file until approved.',
     apprBtn: 'Approve result',
     apprTap: 'Tap again to approve',
@@ -283,8 +285,10 @@ const L = {
     done: 'પૂરું', doneP: p => `પૂરું: ${p}`,
     vmWait: 'ભેજ પૂરું થયા પછી દેખાશે',
     flagState: (p, lim) => `⚠ વધારે: ${p} (મર્યાદા ${lim} %)`,
-    flagNote: (names) => `⚠ મર્યાદા કરતાં વધારે: ${names}`,
+    flagNeg: p => `⚠ નેગેટિવ: ${p} (શક્ય નથી, વજન તપાસો)`,
+    flagNote: (names) => `⚠ મર્યાદા બહાર: ${names}`,
     flagSaved: (n, p, lim) => `⚠ ${n} વધારે છે: ${p}. મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
+    flagSavedNeg: (n, p) => `⚠ ${n} નેગેટિવ છે: ${p}. વજન તપાસો અને સુપરવાઇઝરને જણાવો.`,
     apprNeed: 'મંજૂર થાય ત્યાં સુધી પરિણામ ફાઇલમાં નહીં જાય.',
     apprBtn: 'પરિણામ મંજૂર કરો',
     apprTap: 'મંજૂર કરવા ફરી ટેપ કરો',
@@ -575,7 +579,7 @@ async function loadNames(force) {
 }
 
 /* ---------- approvals.json: flagged results go into results.json only once approved ----------
-   { "limits": { "VM": 17.5, "ASH": 15 }, "approvals": { "T218": { "by": "Girish", "at": "...", "flags": "VM 18.20 %", "w": { "MC": [..], ... } } } }
+   { "limits": { "MC": 17.5, "VM": 17.5, "ASH": 17.5 }, "approvals": { "T218": { "by": "Girish", "at": "...", "flags": "VM 18.20 %", "w": { "MC": [..], ... } } } }
    An approval only counts while the weights are the same as when it was given. */
 let APPR = {};
 try { APPR = JSON.parse(store.get('approvals') || '{}').approvals || {}; } catch (e) { APPR = {}; }
@@ -721,9 +725,11 @@ function parseW(str) {
   const v = Number(s);
   return v > 0 ? v : null;
 }
-// Results above these limits (%) are flagged red in the app and the Excel download.
-const FLAG = { VM: 17.5, ASH: 15 };
-function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct > FLAG[k]; }
+// Results above these limits (%), or below zero (not possible), are flagged red.
+const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5 };
+function isNeg(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct < 0; }
+function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && (st.pct > FLAG[k] || st.pct < 0); }
+function flagText(k, st) { return isNeg(k, st) ? T().flagNeg(pctLine(k, st)) : T().flagState(pctLine(k, st), FLAG[k]); }
 function flagsOf(s) { return ORDER.filter(k => s.tests[k].required && isFlag(k, s.tests[k])); }
 function pctLine(k, st) {
   if (isNum(st.pct)) return `${st.pct.toFixed(2)} %`;
@@ -820,7 +826,7 @@ function stateText(k, st) {
   if (st.done === 1) return t.nextW2;
   if (st.done === 2) return t.inHeat(heat(k));
   const p = pctLine(k, st);
-  if (isFlag(k, st)) return t.flagState(p, FLAG[k]);
+  if (isFlag(k, st)) return flagText(k, st);
   return p ? t.doneP(p) : t.done;
 }
 
@@ -913,7 +919,7 @@ function renderReview() {
     <div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="back-sample">← ${esc(s.code)}</button>${langBtn()}</div>
     <h2 class="title">${esc(lbl(k))}</h2>${infoHTML(s.code)}
-    <div class="result ${isFlag(k, st) ? 'flag' : ''}"><span>${esc(t.result)}</span><b>${esc(pctLine(k, st) || t.done)}</b></div>${isFlag(k, st) ? `<div class="flagnote">${esc(t.flagState(pctLine(k, st), FLAG[k]))}</div>` : ''}
+    <div class="result ${isFlag(k, st) ? 'flag' : ''}"><span>${esc(t.result)}</span><b>${esc(pctLine(k, st) || t.done)}</b></div>${isFlag(k, st) ? `<div class="flagnote">${esc(flagText(k, st))}</div>` : ''}
     <div class="prev">${st.w.map((w, i) => `
       <div class="row"><span>${esc(wLabel(k, i))} (W${i + 1})<br><b>${fmt(w)} g</b></span>
       <button class="link" data-act="edit" data-step="${i + 1}">${esc(t.correct)}</button></div>`).join('')}</div>
@@ -967,7 +973,7 @@ function renderSetup() {
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
         <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. VM above 17.5 % and Ash above 15 % are marked red.</p>
-        <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = above limit)</button>
+        <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = above limit or negative)</button>
         <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
       <div class="row" style="display:block"><b>Lab timeline</b>
         <p class="sub" style="margin:4px 0 8px">See what ran in the oven and furnace, and when, on one chart. Best on a computer.</p>
@@ -1025,7 +1031,7 @@ function resultsTable() {
       ...ORDER.flatMap(k => { const t = s.tests[k];
         return [...t.w.map(v => ({ v: isNum(v) ? v : '' })), { v: isNum(t.pct) ? t.pct : '', flag: isFlag(k, t) }]; }),
       { v: s.tmRequired ? 'Y' : '' }, { v: s.status }, { v: s.last || '' },
-      { v: fl.map(k => `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
+      { v: fl.map(k => isNeg(k, s.tests[k]) ? `${TESTS[k].label} negative` : `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
   });
   return { groups, head2, rows };
 }
@@ -1174,7 +1180,7 @@ function renderModal() {
 function flagMsg(m) {
   if (m.kind !== 's3' && m.kind !== 'corrected') return '';
   const st = sample(S.code) && sample(S.code).tests[S.test];
-  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
+  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(isNeg(S.test, st) ? T().flagSavedNeg(lbl(S.test), pctLine(S.test, st)) : T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
 }
 // Built at display time so it follows the language switch
 function savedMsg(m) {

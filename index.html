@@ -363,18 +363,20 @@ Object.assign(L.gu, {
 Object.assign(L.en, { noCodes: 'No sample codes yet. The supervisor adds them with ⚙ Setup.' });
 Object.assign(L.gu, { noCodes: 'હજી કોઈ સેમ્પલ કોડ નથી. સુપરવાઇઝર ⚙ સેટઅપમાંથી ઉમેરશે.' });
 Object.assign(L.en, {
-  pending: n => `⏳ ${n} change${n > 1 ? 's' : ''} waiting to be saved online`,
-  sending: n => `⟳ Saving ${n} online…`,
+  pending: n => `✓ Saved on this phone · ${n} waiting to go online`,
+  sending: n => `✓ Saved on this phone · sending ${n} online…`,
   retrying: n => `⚠ ${n} not sent yet. Retrying automatically. Tap to retry now`,
   allSent: '✓ Everything saved online',
+  takenOther: n => `W${n} was just saved on another phone. Showing it now, so it is not entered twice.`,
   notSaved: (c, l, n, m) => `${c} ${l} W${n} was not saved: ${m}`,
   cachedList: 'Showing the list saved on this phone. It will update when online.'
 });
 Object.assign(L.gu, {
-  pending: n => `⏳ ${n} ફેરફાર ઓનલાઇન સેવ થવાના બાકી છે`,
-  sending: n => `⟳ ${n} ઓનલાઇન સેવ થઈ રહ્યા છે…`,
+  pending: n => `✓ ફોનમાં સેવ થયું · ${n} ઓનલાઇન જવાના બાકી`,
+  sending: n => `✓ ફોનમાં સેવ થયું · ${n} ઓનલાઇન મોકલાય છે…`,
   retrying: n => `⚠ ${n} વજન હજી ગયા નથી. આપમેળે ફરી પ્રયત્ન થશે. હમણાં મોકલવા ટેપ કરો`,
   allSent: '✓ બધું ઓનલાઇન સેવ થઈ ગયું',
+  takenOther: n => `W${n} હમણાં જ બીજા ફોનમાં સેવ થયું છે. બે વાર ન ભરાય એ માટે તે બતાવીએ છીએ.`,
   notSaved: (c, l, n, m) => `${c} ${l} W${n} સેવ થયું નથી: ${m}`,
   cachedList: 'ફોનમાં સેવ થયેલી યાદી દેખાય છે. ઇન્ટરનેટ મળતાં અપડેટ થશે.'
 });
@@ -552,6 +554,20 @@ const readJSON = (k, d) => { try { return JSON.parse(store.get(k)) || d; } catch
 let Q = readJSON('queue', []);          // weights waiting to reach the sheet (kept if the app is closed)
 let syncing = false, syncTimer = null, syncFails = 0, lastSyncOk = 0;
 function saveQ() { store.set('queue', JSON.stringify(Q)); }
+// GitHub can hand back the copy from before our last save for a few seconds, and a refresh that was
+// already on its way can land after the save. Either would make a saved weight vanish from the card,
+// so every version this phone has seen replaced is remembered and never shown again.
+let OLD = new Set(readJSON('oldShas', [])), wroteAt = 0;
+function markOld(sha) {
+  if (!sha) return;
+  OLD.add(sha);
+  const keep = [...OLD].slice(-100); OLD = new Set(keep); store.set('oldShas', JSON.stringify(keep));
+}
+const isStale = sha => !!sha && OLD.has(sha);
+function takeFile(file, sha) {
+  if (S.fileSha && sha !== S.fileSha) markOld(S.fileSha);
+  S.file = file; S.fileSha = sha || ''; cacheFile(); store.set('fileSha', S.fileSha);
+}
 /* ---------- sample names (names.json, pushed from the Name Tags sheet) ---------- */
 let NAMES = {}, namesAt = 0;
 try { NAMES = JSON.parse(store.get('names') || '{}').names || {}; } catch (e) { NAMES = {}; }
@@ -667,14 +683,15 @@ async function sync() {
   const batch = Q.slice();
   try {
     for (let attempt = 0; ; attempt++) {
-      const { file, sha } = await ghRead();
+      let { file, sha } = await ghRead();
+      if (isStale(sha) && S.file && S.fileSha) { file = JSON.parse(JSON.stringify(S.file)); sha = S.fileSha; }   // our own newer copy
       const f = file || emptyFile();
       batch.forEach(j => fileApply(f, j));
-      try { await ghWrite(f, sha, commitMessage(batch)); S.file = f; break; }
+      try { const next = await ghWrite(f, sha, commitMessage(batch)); markOld(sha); takeFile(f, next); wroteAt = Date.now(); break; }
       catch (e) { if (e.code !== 'CONFLICT' || attempt >= 4) throw e; }   // another phone saved first: read again
     }
     const sent = new Set(batch.map(j => j.id));
-    Q = Q.filter(j => !sent.has(j.id)); saveQ(); cacheFile();
+    Q = Q.filter(j => !sent.has(j.id)); saveQ();
     QT.push(...batch.filter(j => TS_ACTIONS.includes(j.action))); saveQT(); syncTs();
     syncFails = 0; lastSyncOk = Date.now();
     rebuild();
@@ -1255,9 +1272,10 @@ async function load(showToast) {
   if (loading) return;
   if (!KEY) { if (!S.data) renderNotReady(); return; }
   loading = true;
+  const started = Date.now();
   try {
-    const [{ file }] = await Promise.all([ghRead(), loadNames(showToast), loadApprovals()]);
-    S.file = file || emptyFile(); cacheFile();
+    const [{ file, sha }] = await Promise.all([ghRead(), loadNames(showToast), loadApprovals()]);
+    if (!isStale(sha) && wroteAt <= started) takeFile(file || emptyFile(), sha);   // else keep what we just saved
     rebuild();
     if (!S.modal && S.view !== 'setup' && !(S.view === 'step' && document.activeElement && document.activeElement.id === 'w')) render();
     if (showToast) toast(T().updated, true);
@@ -1284,6 +1302,24 @@ function openTest(k) {
   if (st.done === 3) S.view = 'review';
   else { S.step = st.done + 1; S.view = 'step'; }
   render();
+  if (S.view === 'step') checkCard();
+}
+// Two phones on one card: look at the newest copy as soon as a weight screen opens,
+// and if another phone has already saved this weight, show that instead of asking for it again
+async function checkCard() {
+  const code = S.code, k = S.test, step = S.step, started = Date.now();
+  try {
+    const { file, sha } = await ghRead();
+    if (!file || isStale(sha) || wroteAt > started) return;
+    takeFile(file, sha); rebuild();
+  } catch (e) { return; }
+  if (S.view !== 'step' || S.editing || S.code !== code || S.test !== k || S.step !== step) return;
+  if (S.modal && S.modal.type !== 'confirm') return;
+  const st = sample(code) && sample(code).tests[k];
+  if (!st || st.done < step) return;
+  S.modal = null;
+  toast(T().takenOther(step));
+  openTest(k);
 }
 
 // Rounded to 4 decimals (the balance) so 1.0090 is allowed and 1.0091 is not
@@ -1461,7 +1497,7 @@ setInterval(() => {
   }
 })();
 S.tests = TESTS; S.order = ORDER;
-S.file = readJSON('file', null);
+S.file = readJSON('file', null); S.fileSha = store.get('fileSha');
 setTimeout(syncTs, 1500);
 if (S.file && S.file.codes) rebuild();
 if (S.worker) { if (S.data) render(); else renderNotReady(); load(); sync(); } else render();

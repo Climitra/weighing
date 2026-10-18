@@ -163,6 +163,8 @@ const L = {
     noneWaiting: 'No samples with W2 are waiting for this test. You can still start the timer.',
     start: 'Start timer', cancel: 'Cancel', close: 'Close',
     running: 'Running', addTime: 'Add time', stopEarly: 'Stop early', confirmStop: 'Tap again to stop',
+    reset: 'Reset (started by mistake)', confirmReset: 'Tap again to reset', resetHelp: 'Cancels this timer. The samples go back to waiting and the batch is not counted.',
+    wasReset: s => `${s} reset. Samples are back in the waiting list.`,
     started: t => `started ${t}`, inside: 'Inside',
     ready: (s, t) => `${s} · ${t} is ready`, takeOut: 'Take out:', overdue: m => `${m} min over time`,
     snoozeLbl: 'Snooze', stopOut: 'STOP – taken out', snoozedTo: t => `Snoozed. Rings again at ${t}.`,
@@ -187,6 +189,8 @@ const L = {
     noneWaiting: 'આ ટેસ્ટ માટે W2 વાળા કોઈ સેમ્પલ બાકી નથી. છતાં ટાઇમર શરૂ કરી શકો છો.',
     start: 'ટાઇમર શરૂ કરો', cancel: 'રદ કરો', close: 'બંધ કરો',
     running: 'ચાલુ', addTime: 'સમય ઉમેરો', stopEarly: 'વહેલું બંધ કરો', confirmStop: 'બંધ કરવા ફરી ટેપ કરો',
+    reset: 'રીસેટ (ભૂલથી શરૂ થયું)', confirmReset: 'રીસેટ કરવા ફરી ટેપ કરો', resetHelp: 'આ ટાઇમર રદ થશે. સેમ્પલ પાછા બાકીની યાદીમાં જશે અને આ બેચ ગણાશે નહીં.',
+    wasReset: s => `${s} રીસેટ થયું. સેમ્પલ પાછા બાકીની યાદીમાં છે.`,
     started: t => `${t} વાગ્યે શરૂ`, inside: 'અંદર',
     ready: (s, t) => `${s} · ${t} તૈયાર છે`, takeOut: 'બહાર કાઢો:', overdue: m => `${m} મિનિટ વધુ થઈ`,
     snoozeLbl: 'સ્નૂઝ', stopOut: 'બંધ – બહાર કાઢ્યું', snoozedTo: t => `સ્નૂઝ થયું. ${t} વાગ્યે ફરી વાગશે.`,
@@ -302,7 +306,7 @@ function tidy() {
 }
 
 /* ---------- timerlog.json: a permanent record of every batch ----------
-   { "batches": { "<id>": { section, test, capacity, samples, plannedMin, started, ready, events, takenOut, actualMin, stoppedEarly } } }
+   { "batches": { "<id>": { section, test, capacity, samples, plannedMin, started, ready, events, takenOut, actualMin, stoppedEarly, cancelled } } }
    Kept on this device until GitHub has it, so nothing is lost if the internet drops. */
 const isoLocal = ms => { const d = new Date(ms), off = -d.getTimezoneOffset(), a = Math.abs(off);
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}${off >= 0 ? '+' : '-'}${p2(Math.floor(a / 60))}:${p2(a % 60)}`; };
@@ -317,7 +321,9 @@ function logEntry(b) {
     started: isoLocal(b.start), ready: isoLocal(b.end),
     events: (b.events || []).map(e => ({ type: e.type, at: isoLocal(e.at), min: e.min })),
     takenOut: b.out ? isoLocal(b.out) : null, stoppedEarly: !!b.early,
-    actualMin: b.out ? Math.round((b.out - b.start) / 6000) / 10 : null };
+    actualMin: b.out ? Math.round((b.out - b.start) / 6000) / 10 : null,
+    // started by mistake and reset: kept as a record, but the dashboard leaves it out
+    cancelled: b.cancelled ? isoLocal(b.cancelled) : null };
 }
 function logBatch(b) { LQ[b.id] = logEntry(b); store.set('timer-logq', JSON.stringify(LQ)); syncLog(); }
 const b64e = str => { const by = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < by.length; i += 0x8000) bin += String.fromCharCode.apply(null, by.subarray(i, i + 0x8000)); return btoa(bin); };
@@ -376,6 +382,14 @@ function snooze(b, min) {
 function takeOut(b) {
   b.early = Date.now() < b.end; b.state = 'out'; b.out = Date.now();
   saveBatches(); logBatch(b); stopSound(); tidy();
+}
+
+// Started by mistake: drop the batch so its samples are waiting again, and mark it cancelled in the log
+function resetBatch(b) {
+  b.cancelled = Date.now(); (b.events = b.events || []).push({ type: 'reset', at: b.cancelled, min: 0 });
+  S.batches = S.batches.filter(x => x !== b);
+  saveBatches(); logBatch(b); stopSound();
+  toast(T().wasReset(secName(b.section)));
 }
 
 /* ---------- alarm sound, vibration, screen awake ---------- */
@@ -472,6 +486,8 @@ function sheetHTML() {
       <div class="adj" style="grid-template-columns:repeat(3,1fr)">${SNOOZE.map(m => `<button data-act="add" data-min="${m}">+${m} ${esc(t.m)}</button>`).join('')}</div>
       <div class="btnrow"><button class="secondary" data-act="close">${esc(t.close)}</button>
         <button class="secondary danger" data-act="stop-early">${esc(S.armed === b.id ? t.confirmStop : t.stopEarly)}</button></div>
+      <button class="secondary" style="width:100%;margin-top:10px;${S.armed === 'reset' + b.id ? 'border-color:var(--err);color:var(--err)' : ''}" data-act="reset">${esc(S.armed === 'reset' + b.id ? t.confirmReset : t.reset)}</button>
+      <p class="meta" style="margin:6px 0 0">${esc(t.resetHelp)}</p>
     </div></div>`;
   }
   // start a new batch
@@ -642,6 +658,12 @@ document.addEventListener('click', e => {
       const b = sectionBatch(sh.sec); if (!b) break;
       if (S.armed !== b.id) { S.armed = b.id; render(); setTimeout(() => { if (S.armed === b.id) { S.armed = null; render(); } }, 4000); break; }
       takeOut(b); S.sheet = null; S.armed = null; render(); break;
+    }
+    case 'reset': {
+      const b = sectionBatch(sh.sec); if (!b) break;
+      const arm = 'reset' + b.id;
+      if (S.armed !== arm) { S.armed = arm; render(); setTimeout(() => { if (S.armed === arm) { S.armed = null; render(); } }, 4000); break; }
+      resetBatch(b); S.sheet = null; S.armed = null; render(); break;
     }
     case 'snooze': { const b = S.batches.find(x => x.id === el.dataset.id); if (b) snooze(b, +el.dataset.min); render(); break; }
     case 'takeout': { const b = S.batches.find(x => x.id === el.dataset.id); if (b) takeOut(b); render(); break; }

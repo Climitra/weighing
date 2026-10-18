@@ -222,6 +222,8 @@ const L = {
     vmWait: 'Shows after Moisture is done',
     flagState: (p, lim) => `⚠ High: ${p} (limit ${lim} %)`,
     flagNeg: p => `⚠ Negative: ${p} (not possible, check the weights)`,
+    flagLow: (p, lim) => `⚠ Too low: ${p}. Lower limit is ${lim} %. Check the weights.`,
+    flagSavedLow: (n, p, lim) => `⚠ ${n} is low: ${p}. Lower limit is ${lim} %. Tell the supervisor.`,
     flagNote: (names) => `⚠ Out of range: ${names}`,
     flagSaved: (n, p, lim) => `⚠ ${n} is high: ${p}. Limit is ${lim} %. Tell the supervisor.`,
     flagSavedNeg: (n, p) => `⚠ ${n} is negative: ${p}. Check the weights and tell the supervisor.`,
@@ -302,6 +304,8 @@ const L = {
     vmWait: 'ભેજ પૂરું થયા પછી દેખાશે',
     flagState: (p, lim) => `⚠ વધારે: ${p} (મર્યાદા ${lim} %)`,
     flagNeg: p => `⚠ નેગેટિવ: ${p} (શક્ય નથી, વજન તપાસો)`,
+    flagLow: (p, lim) => `⚠ ખૂબ ઓછું: ${p}. નીચી મર્યાદા ${lim} % છે. વજન તપાસો.`,
+    flagSavedLow: (n, p, lim) => `⚠ ${n} ઓછું છે: ${p}. નીચી મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
     flagNote: (names) => `⚠ મર્યાદા બહાર: ${names}`,
     flagSaved: (n, p, lim) => `⚠ ${n} વધારે છે: ${p}. મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
     flagSavedNeg: (n, p) => `⚠ ${n} નેગેટિવ છે: ${p}. વજન તપાસો અને સુપરવાઇઝરને જણાવો.`,
@@ -761,10 +765,11 @@ function parseW(str) {
   return v > 0 ? v : null;
 }
 // Results above these limits (%), or below zero (not possible), are flagged red.
-const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5 };
+const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5 }, FLAG_LOW = 1.5;   // keep in step with LIMITS/LOWER in weighing-data compute_results.py
 function isNeg(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct < 0; }
-function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && (st.pct > FLAG[k] || st.pct < 0); }
-function flagText(k, st) { return isNeg(k, st) ? T().flagNeg(pctLine(k, st)) : T().flagState(pctLine(k, st), FLAG[k]); }
+function isLow(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct >= 0 && st.pct < FLAG_LOW; }
+function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && (st.pct > FLAG[k] || st.pct < FLAG_LOW); }
+function flagText(k, st) { return isNeg(k, st) ? T().flagNeg(pctLine(k, st)) : isLow(k, st) ? T().flagLow(pctLine(k, st), FLAG_LOW) : T().flagState(pctLine(k, st), FLAG[k]); }
 function flagsOf(s) { return ORDER.filter(k => s.tests[k].required && isFlag(k, s.tests[k])); }
 function pctLine(k, st) {
   if (isNum(st.pct)) return `${st.pct.toFixed(2)} %`;
@@ -1042,8 +1047,8 @@ function renderSetup() {
 
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
-        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 % or negative are marked red.</p>
-        <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = above limit or negative)</button>
+        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 %, below 1.5 % or negative are marked red.</p>
+        <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = outside limits)</button>
         <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
       <div class="row" style="display:block"><b>Results files on GitHub</b>
         <p class="sub" style="margin:4px 0 8px">results.json, retest.json and retest.csv update by themselves every 15 minutes. Tap to update them now.</p>
@@ -1104,7 +1109,7 @@ function resultsTable() {
       ...ORDER.flatMap(k => { const t = s.tests[k];
         return [...t.w.map(v => ({ v: isNum(v) ? v : '' })), { v: isNum(t.pct) ? t.pct : '', flag: isFlag(k, t) }]; }),
       { v: s.tmRequired ? 'Y' : '' }, { v: s.status }, { v: s.last || '' },
-      { v: fl.map(k => isNeg(k, s.tests[k]) ? `${TESTS[k].label} negative` : `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
+      { v: fl.map(k => isNeg(k, s.tests[k]) ? `${TESTS[k].label} negative` : isLow(k, s.tests[k]) ? `${TESTS[k].label} < ${FLAG_LOW}%` : `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
   });
   return { groups, head2, rows };
 }
@@ -1264,7 +1269,7 @@ function renderModal() {
 function flagMsg(m) {
   if (m.kind !== 's3' && m.kind !== 'corrected') return '';
   const st = sample(S.code) && sample(S.code).tests[S.test];
-  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(isNeg(S.test, st) ? T().flagSavedNeg(lbl(S.test), pctLine(S.test, st)) : T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
+  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(isNeg(S.test, st) ? T().flagSavedNeg(lbl(S.test), pctLine(S.test, st)) : isLow(S.test, st) ? T().flagSavedLow(lbl(S.test), pctLine(S.test, st), FLAG_LOW) : T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
 }
 // Built at display time so it follows the language switch
 function savedMsg(m) {

@@ -74,6 +74,22 @@
   .back { background: none; border: 0; padding: 8px 0; font-weight: 700; color: var(--muted); font-size: 1rem; }
   .title { font-size: 1.9rem; margin: 4px 0 2px; color: var(--c, var(--ink)); }
   .sub { color: var(--muted); margin: 0 0 16px; }
+  /* previous / next sample on a sample screen (also by swiping) */
+  .cardnav { display: flex; justify-content: space-between; gap: 10px; margin: 10px 0 4px; }
+  .cardnav button { flex: 0 1 auto; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+                    padding: 8px 14px; font-weight: 700; font-size: .95rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cardnav button:disabled { visibility: hidden; }
+  body { overflow-x: clip; }                 /* the slide-in never makes the page scroll sideways */
+  @media (prefers-reduced-motion: no-preference) {
+    .slide-next { animation: fromR .2s ease-out; }
+    .slide-prev { animation: fromL .2s ease-out; }
+    .bump-next { animation: bumpR .25s ease-out; }
+    .bump-prev { animation: bumpL .25s ease-out; }
+    @keyframes fromR { from { transform: translateX(40px); opacity: 0; } }
+    @keyframes fromL { from { transform: translateX(-40px); opacity: 0; } }
+    @keyframes bumpR { 50% { transform: translateX(-14px); } }
+    @keyframes bumpL { 50% { transform: translateX(14px); } }
+  }
 
   .testrow { display: flex; gap: 8px; align-items: stretch; }
   .testrow .testbtn { flex: 1; min-width: 0; }
@@ -369,7 +385,8 @@ Object.assign(L.en, {
   allSent: '✓ Everything saved online',
   takenOther: n => `W${n} was just saved on another phone. Showing it now, so it is not entered twice.`,
   notSaved: (c, l, n, m) => `${c} ${l} W${n} was not saved: ${m}`,
-  cachedList: 'Showing the list saved on this phone. It will update when online.'
+  cachedList: 'Showing the list saved on this phone. It will update when online.',
+  prevCard: 'Previous sample', nextCard: 'Next sample'
 });
 Object.assign(L.gu, {
   pending: n => `✓ ફોનમાં સેવ થયું · ${n} ઓનલાઇન જવાના બાકી`,
@@ -378,7 +395,8 @@ Object.assign(L.gu, {
   allSent: '✓ બધું ઓનલાઇન સેવ થઈ ગયું',
   takenOther: n => `W${n} હમણાં જ બીજા ફોનમાં સેવ થયું છે. બે વાર ન ભરાય એ માટે તે બતાવીએ છીએ.`,
   notSaved: (c, l, n, m) => `${c} ${l} W${n} સેવ થયું નથી: ${m}`,
-  cachedList: 'ફોનમાં સેવ થયેલી યાદી દેખાય છે. ઇન્ટરનેટ મળતાં અપડેટ થશે.'
+  cachedList: 'ફોનમાં સેવ થયેલી યાદી દેખાય છે. ઇન્ટરનેટ મળતાં અપડેટ થશે.',
+  prevCard: 'પાછલું સેમ્પલ', nextCard: 'આગલું સેમ્પલ'
 });
 const T = () => L[S.lang] || L.en;
 const lbl = k => T().label[k] || S.tests[k].label;
@@ -796,10 +814,15 @@ function chip(k, st) {
 }
 
 function searchText(code) { const n = nameOf(code); return n ? [n.name, n.supplier, fmtDate(n.date)].join(' ').toLowerCase() : ''; }
+// The samples the list shows, in its order (search and "show completed" apply)
+function listed() {
+  const q = S.query.trim().toLowerCase();
+  return S.data.samples.filter(s =>
+    (S.showDone || s.status !== 'Complete') && (!q || s.code.toLowerCase().includes(q) || searchText(s.code).includes(q)));
+}
 function listHTML() {
   const q = S.query.trim().toLowerCase();
-  const list = S.data.samples.filter(s =>
-    (S.showDone || s.status !== 'Complete') && (!q || s.code.toLowerCase().includes(q) || searchText(s.code).includes(q)));
+  const list = listed();
   if (!list.length)
     return `<div class="empty">${esc(q ? T().noMatch(S.query) : S.data.samples.length ? T().allDone : T().noCodes)}</div>`;
   return list.map(s => `
@@ -871,9 +894,39 @@ function renderSample() {
       ${s.tmRequired ? testBtn(s, tmK) : ''}</div>` : '';
   return `<div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="home">${esc(t.allSamples)}</button>${langBtn()}</div>
-    <h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}${flagsOf(s).length ? `<div class="flagnote">${esc(t.flagNote(flagsOf(s).map(lbl).join(', ')))}</div>` : ''}${approvalHTML(s)}
+    ${navHTML()}<h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}${flagsOf(s).length ? `<div class="flagnote">${esc(t.flagNote(flagsOf(s).map(lbl).join(', ')))}</div>` : ''}${approvalHTML(s)}
     <p class="sub" style="margin-top:8px">${esc(t.chooseTest)}</p>
     <div class="list">${main}</div>${tm}`;
+}
+
+// Previous and next sample, as the list shows them. A sample that has dropped off the list
+// (e.g. it just became complete) still steps to its neighbours in the full list.
+function neighbours() {
+  let list = listed();
+  if (!list.some(s => s.code === S.code)) list = S.data.samples;
+  const i = list.findIndex(s => s.code === S.code);
+  return { prev: i > 0 ? list[i - 1].code : null, next: i >= 0 && i < list.length - 1 ? list[i + 1].code : null };
+}
+function navHTML() {
+  const t = T(), n = neighbours();
+  return `<div class="cardnav">
+    <button data-act="card" data-dir="prev" aria-label="${esc(t.prevCard)}" ${n.prev ? '' : 'disabled'}>‹ ${esc(n.prev || '')}</button>
+    <button data-act="card" data-dir="next" aria-label="${esc(t.nextCard)}" ${n.next ? '' : 'disabled'}>${esc(n.next || '')} ›</button></div>`;
+}
+// Move to the previous/next sample without going back to the list
+function goCard(dir) {
+  if (S.view !== 'sample' || S.modal || S.busy) return;
+  const code = neighbours()[dir];
+  if (!code) { animate('bump-' + dir); return; }
+  S.code = code;
+  rememberCard(`.sample[data-code="${CSS.escape(code)}"]`);   // the list comes back on this card
+  render();
+  animate('slide-' + dir);
+}
+function animate(cls) {
+  app.classList.remove('slide-next', 'slide-prev', 'bump-next', 'bump-prev');
+  void app.offsetWidth;                      // restart the animation
+  app.classList.add(cls);
 }
 
 function renderStep() {
@@ -1403,6 +1456,7 @@ document.addEventListener('click', e => {
       rememberCard(`.testbtn[data-code="${CSS.escape(el.dataset.code)}"][data-test="${CSS.escape(el.dataset.test)}"]`);
       S.code = el.dataset.code; openTest(el.dataset.test); break;
     case 'open-test': openTest(el.dataset.test); break;
+    case 'card': goCard(el.dataset.dir); break;
     case 'home': S.view = 'home'; render(); S.restoreOnce = true; load(false); break;
     case 'back-sample': S.view = 'sample'; S.modal = null; render(); break;
     case 'tm': setTm(el.dataset.val === '1'); break;
@@ -1459,7 +1513,27 @@ document.addEventListener('input', e => {
   }
 });
 
+// Swipe left for the next sample, right for the previous one (sample screen only, never on a weight screen)
+let swipe = null;
+document.addEventListener('touchstart', e => {
+  const p = e.touches[0];
+  // one finger, not from the very edge (Android's back gesture starts there)
+  swipe = (S.view === 'sample' && !S.modal && e.touches.length === 1 && p.clientX > 24 && p.clientX < window.innerWidth - 24)
+    ? { x: p.clientX, y: p.clientY, t: Date.now() } : null;
+}, { passive: true });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1) swipe = null; }, { passive: true });
+document.addEventListener('touchend', e => {
+  if (!swipe) return;
+  const p = e.changedTouches[0], dx = p.clientX - swipe.x, dy = p.clientY - swipe.y, quick = Date.now() - swipe.t < 800;
+  swipe = null;
+  if (quick && Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) goCard(dx < 0 ? 'next' : 'prev');
+}, { passive: true });
+document.addEventListener('touchcancel', () => { swipe = null; });
+app.addEventListener('animationend', () => app.classList.remove('slide-next', 'slide-prev', 'bump-next', 'bump-prev'));
+
 document.addEventListener('keydown', e => {
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.view === 'sample' && !e.target.closest('input, textarea'))
+    { goCard(e.key === 'ArrowRight' ? 'next' : 'prev'); return; }
   if (e.key !== 'Enter' || S.busy) return;
   if (e.target.id === 'w') askConfirm();
   else if (e.target.id === 'nm') saveName();

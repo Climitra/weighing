@@ -171,7 +171,7 @@
 
 <script>
 /* ====== SETTINGS: where the results are stored (a PRIVATE GitHub repository) ====== */
-const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'data.json', tsPath: 'timestamps.json', namesPath: 'names.json', apprPath: 'approvals.json', branch: 'main' };
+const GH = { owner: 'girish-vastrakar', repo: 'weighing-data', path: 'data.json', tsPath: 'timestamps.json', namesPath: 'names.json', apprPath: 'approvals.json', logPath: 'corrections.json', branch: 'main' };
 /* The access key is NOT written here. It is given to each phone once with the setup link:
    https://girish-vastrakar.github.io/weighing/#key=YOUR_KEY   (the app saves it and hides it)  */
 
@@ -478,7 +478,7 @@ function isoLocal(ms) {
 function tsApply(t, j) {
   if (j.action === 'saveWeight') {
     const c = t[j.code] = t[j.code] || {}, k = c[TS_NAME[j.key]] = c[TS_NAME[j.key]] || {};
-    k['W' + j.step] = { at: isoLocal(j.at), by: j.worker || 'Unknown' };
+    k['W' + j.step] = j.ts || { at: isoLocal(j.at), by: j.worker || 'Unknown' };   // a restore puts back who first saved it
   } else if (j.action === 'resetTest') {
     if (t[j.code]) { delete t[j.code][TS_NAME[j.key]]; if (!Object.keys(t[j.code]).length) delete t[j.code]; }
   } else if (j.action === 'removeCode') {
@@ -499,17 +499,85 @@ async function syncTs() {
     for (let attempt = 0; ; attempt++) {
       const { file, sha } = await ghRead(GH.tsPath);
       const t = file || {};
-      batch.forEach(j => tsApply(t, j));
+      batch.forEach(j => { if (j.lost) j.lost.forEach(e => { e.saved = savedOf(t, e); }); tsApply(t, j); });
       try { await ghWrite(t, sha, 'timestamps: ' + commitMessage(batch), GH.tsPath); break; }
       catch (e) { if (e.code !== 'CONFLICT' || attempt >= 4) throw e; }
     }
     const sent = new Set(batch.map(j => j.id));
     QT = QT.filter(j => !sent.has(j.id)); saveQT();
+    toLog(batch);
   } catch (err) {
     if (err.code !== 'KEY') tsTimer = setTimeout(syncTs, 30000);
   }
   tsSyncing = false;
   if (QT.length && !tsTimer) syncTs();
+}
+
+/* ---------- corrections.json: every weight that was overwritten or reset, so it can be put back ----------
+   { "entries": [ { "id", "at", "by", "action": "overwrite" | "reset" | "import" | "restore", "code", "test", "key",
+                    "step": 1-3 (null for a reset), "old", "new", "saved": who saved the old value and when } ] }
+   Only appended to. A first save into an empty box is not a correction and is not listed.          */
+// What a change is about to replace in the data file (null when nothing is lost)
+function lostOf(f, j) {
+  const out = [];
+  const add = (code, key, step, old, nw, action) => out.push({ id: j.id + (out.length ? '-' + out.length : ''), at: isoLocal(j.at),
+    by: j.worker || 'Unknown', action, code, test: TESTS[key].label, key, step, old, new: nw });
+  const cell = (code, key, i) => { const s = f.samples[code]; return s && s.w[key] && s.w[key][i] != null ? s.w[key][i] : null; };
+  if (j.action === 'saveWeight') {
+    const old = cell(j.code, j.key, j.step - 1);
+    if (j.restoreOf) { add(j.code, j.key, j.step, old, j.value, 'restore'); out[0].restoreOf = j.restoreOf; }
+    else if (old !== null && old !== j.value) add(j.code, j.key, j.step, old, j.value, 'overwrite');
+  } else if (j.action === 'resetTest') {
+    const s = f.samples[j.code], w = s && s.w[j.key], pct = s && s.pct ? s.pct[j.key] : null;
+    if (w && (w.some(v => v != null) || pct != null)) {
+      add(j.code, j.key, null, w.slice(), [null, null, null], 'reset');
+      if (pct != null) out[0].oldResult = pct;
+    }
+  } else if (j.action === 'importRows') {
+    j.rows.forEach(r => ORDER.forEach(k => (r.w[k] || []).forEach((v, i) => {
+      const old = cell(r.code, k, i);
+      if (v !== null && old !== null && old !== v) add(r.code, k, i + 1, old, v, 'import');
+    })));
+  }
+  return out.length ? out : null;
+}
+function savedOf(t, e) {
+  const k = t[e.code] && t[e.code][TS_NAME[e.key]];
+  if (!k) return null;
+  return JSON.parse(JSON.stringify(e.step ? k['W' + e.step] || null : k));
+}
+let QL = (() => { try { return JSON.parse(store.get('logqueue')) || []; } catch (e) { return []; } })();
+let logSyncing = false, logTimer = null, LOG = null;
+function saveQL() { store.set('logqueue', JSON.stringify(QL)); }
+function toLog(jobs) {
+  const add = jobs.filter(j => j.lost).flatMap(j => j.lost);
+  if (!add.length) return;
+  QL.push(...add); saveQL(); syncLog();
+}
+// Only runs when something was overwritten or reset, so normal saving costs no extra GitHub calls
+async function syncLog() {
+  clearTimeout(logTimer); logTimer = null;
+  if (logSyncing || !QL.length || !KEY) return;
+  logSyncing = true;
+  const batch = QL.slice();
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const { file, sha } = await ghRead(GH.logPath);
+      const f = file || { about: 'Every weight that was overwritten or reset in the weighing app. Restore from the app: Setup → Corrections and resets.', entries: [] };
+      f.entries = f.entries || [];
+      const have = new Set(f.entries.map(e => e.id));
+      f.entries.push(...batch.filter(e => !have.has(e.id)));
+      try { await ghWrite(f, sha, 'corrections: ' + batch.map(e => `${e.code} ${e.test} ${e.action}`).join(', ').slice(0, 200), GH.logPath); LOG = f; break; }
+      catch (e) { if (e.code !== 'CONFLICT' || attempt >= 4) throw e; }
+    }
+    const sent = new Set(batch.map(e => e.id));
+    QL = QL.filter(e => !sent.has(e.id)); saveQL();
+    if (S.log && S.log.entries) { S.log = LOG; const el = document.getElementById('loglist'); if (el) { const box = document.createElement('div'); box.innerHTML = logHTML(); el.replaceWith(box.querySelector('#loglist')); } }
+  } catch (err) {
+    if (err.code !== 'KEY') logTimer = setTimeout(syncLog, 30000);
+  }
+  logSyncing = false;
+  if (QL.length && !logTimer) syncLog();
 }
 
 /* ---------- the data file <-> what the screens use ---------- */
@@ -708,13 +776,14 @@ async function sync() {
       let { file, sha } = await ghRead();
       if (isStale(sha) && S.file && S.fileSha) { file = JSON.parse(JSON.stringify(S.file)); sha = S.fileSha; }   // our own newer copy
       const f = file || emptyFile();
-      batch.forEach(j => fileApply(f, j));
+      batch.forEach(j => { j.lost = lostOf(f, j); fileApply(f, j); });   // note what each change replaces, as GitHub has it
       try { const next = await ghWrite(f, sha, commitMessage(batch)); markOld(sha); takeFile(f, next); wroteAt = Date.now(); break; }
       catch (e) { if (e.code !== 'CONFLICT' || attempt >= 4) throw e; }   // another phone saved first: read again
     }
     const sent = new Set(batch.map(j => j.id));
     Q = Q.filter(j => !sent.has(j.id)); saveQ();
     QT.push(...batch.filter(j => TS_ACTIONS.includes(j.action))); saveQT(); syncTs();
+    toLog(batch.filter(j => !TS_ACTIONS.includes(j.action)));     // the rest go to the log after timestamps.json
     syncFails = 0; lastSyncOk = Date.now();
     rebuild();
     if (!S.modal && S.view !== 'step' && S.view !== 'setup') render();
@@ -1056,11 +1125,57 @@ function renderSetup() {
       <div class="row" style="display:block"><b>Lab timeline</b>
         <p class="sub" style="margin:4px 0 8px">See what ran in the oven and furnace, and when, on one chart. Best on a computer.</p>
         <a class="secondary" href="dashboard.html" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;color:inherit;padding:18px;border:1px solid var(--line);border-radius:14px;font-weight:700">Open lab timeline</a></div>
+      <div class="row" style="display:block"><b>Corrections and resets</b>
+        <p class="sub" style="margin:4px 0 8px">Every weight that was changed or reset is kept in corrections.json. If something was deleted by mistake, find it here and tap Restore.</p>
+        ${logHTML()}</div>
       <div class="row" style="display:block"><b>Bring in old data</b>
         <p class="sub" style="margin:4px 0 8px">In Google Sheets open the <i>logging</i> tab → File → Download → CSV, then choose that file here. Codes and weights are added; nothing is deleted.</p>
         <button class="secondary" data-act="import" style="width:100%">Import logging CSV</button>
         <input type="file" id="csvfile" accept=".csv,text/csv" hidden></div>
     </div>`;
+}
+const fmtV = v => v == null ? '–' : fmt(v);
+function logHTML() {
+  if (!S.log) return '<button class="secondary" data-act="load-log" style="width:100%">Show corrections and resets</button>';
+  if (S.log === 'loading') return '<p class="sub">Loading…</p>';
+  if (S.log.error) return `<p class="sub" style="color:var(--err)">${esc(S.log.error)}</p><button class="secondary" data-act="load-log" style="width:100%">Try again</button>`;
+  const sentIds = new Set(S.log.entries.map(e => e.id));
+  const all = S.log.entries.concat(QL.filter(e => !sentIds.has(e.id)).map(e => ({ ...e, unsent: true })));
+  const q = (S.logQuery || '').trim().toUpperCase();
+  const list = all.filter(e => !q || String(e.code).toUpperCase().includes(q)).slice(-50).reverse();
+  const what = e => e.step ? `W${e.step}: ${fmtV(e.old)} → ${fmtV(e.new)} g`
+    : `W1 ${fmtV(e.old[0])}, W2 ${fmtV(e.old[1])}, W3 ${fmtV(e.old[2])} g → cleared${e.oldResult != null ? ` (result was ${e.oldResult} %)` : ''}`;
+  const rows = list.map(e => `<div class="row"><span><b>${esc(e.code)} · ${esc(e.test)} · ${esc(e.action)}</b>${e.unsent ? ' <i>(not sent yet)</i>' : ''}<br>
+      ${esc(what(e))}<br><span class="sub">by ${esc(e.by)} · ${esc(stamp(e.at))}${e.saved && e.step && e.saved.by ? ` · old value saved by ${esc(e.saved.by)}` : ''}</span></span>
+      ${restorable(e).length ? `<button class="link" data-act="restore-log" data-id="${esc(e.id)}">Restore</button>` : ''}</div>`).join('');
+  return `<input class="field" id="logq" data-input="logq" type="text" autocomplete="off" autocapitalize="characters" placeholder="Sample code, e.g. T312" value="${esc(S.logQuery || '')}" style="margin:0 0 8px">
+    <div id="loglist">${rows || '<p class="sub">Nothing changed or reset yet.</p>'}</div>
+    <a href="https://github.com/${GH.owner}/${GH.repo}/blob/${GH.branch}/${GH.logPath}" target="_blank" rel="noopener" class="sub">Open corrections.json on GitHub</a>`;
+}
+async function loadLog() {
+  S.log = 'loading'; render();
+  try { const { file } = await ghRead(GH.logPath); S.log = LOG = file || { entries: [] }; S.log.entries = S.log.entries || []; }
+  catch (e) { S.log = { error: e.code === 'OFFLINE' ? 'No internet. Try again.' : errText(e) }; }
+  if (S.view === 'setup') render();
+}
+// The old values that differ from what the card shows now: [[step, value, saved], ...]
+function restorable(e) {
+  const s = S.data && S.data.samples.find(x => x.code === e.code);
+  if (!s || !s.tests[e.key]) return [];
+  const cur = s.tests[e.key].w;
+  const cells = e.step ? [[e.step, e.old, e.saved]] : [1, 2, 3].map(n => [n, e.old[n - 1], e.saved && e.saved['W' + n]]);
+  return cells.filter(([n, v]) => v != null && cur[n - 1] !== v);
+}
+function restoreLog(el) {
+  const e = S.log && S.log.entries.concat(QL).find(x => x.id === el.dataset.id);
+  if (!e) return;
+  const cells = restorable(e);
+  if (!cells.length) { toast('The card already has these weights. Nothing to restore.', true); return; }
+  if (!confirmTap(el)) return;
+  cells.forEach(([step, value, saved]) =>
+    enqueue({ action: 'saveWeight', code: e.code, key: e.key, step, value, worker: S.worker || 'Supervisor', restoreOf: e.id, ts: saved || undefined }));
+  toast(`${e.code} ${e.test}: ${cells.map(c => 'W' + c[0]).join(', ')} restored.`, true);
+  render();
 }
 function saveKey() {
   const v = (document.getElementById('key').value || '').trim();
@@ -1502,6 +1617,8 @@ document.addEventListener('click', e => {
     case 'export': exportCSV(); break;
     case 'export-xlsx': exportXLSX(); break;
     case 'run-results': runResults(el); break;
+    case 'load-log': loadLog(); break;
+    case 'restore-log': restoreLog(el); break;
     case 'import': document.getElementById('csvfile').click(); break;
     case 'name': S.view = 'name'; render(); break;
     case 'save-name': saveName(); break;
@@ -1512,6 +1629,10 @@ document.addEventListener('input', e => {
   if (e.target.id === 'w') {
     S.draft = e.target.value;
     document.getElementById('live').innerHTML = liveText();
+  } else if (e.target.dataset.input === 'logq') {
+    S.logQuery = e.target.value;
+    const box = document.createElement('div'); box.innerHTML = logHTML();
+    document.getElementById('loglist').replaceWith(box.querySelector('#loglist'));
   } else if (e.target.dataset.input === 'query') {
     S.query = e.target.value;
     document.getElementById('list').innerHTML = listHTML();
@@ -1577,7 +1698,7 @@ setInterval(() => {
 })();
 S.tests = TESTS; S.order = ORDER;
 S.file = readJSON('file', null); S.fileSha = store.get('fileSha');
-setTimeout(syncTs, 1500);
+setTimeout(syncTs, 1500); setTimeout(syncLog, 2500);
 if (S.file && S.file.codes) rebuild();
 if (S.worker) { if (S.data) render(); else renderNotReady(); load(); sync(); } else render();
 showSync();

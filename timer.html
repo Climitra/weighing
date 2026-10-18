@@ -69,6 +69,8 @@
   .code { padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); font-variant-numeric: tabular-nums; font-size: .92rem; }
   .code.done { text-decoration: line-through; color: var(--muted); }
   .none { color: var(--muted); }
+  .prep { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 8px 0 4px; font-size: .88rem; color: var(--muted); font-weight: 700; }
+  .prep .link { padding: 0; font-size: .88rem; }
 
   /* sheets / dialogs */
   .modal { position: fixed; inset: 0; background: rgba(20,30,38,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
@@ -147,8 +149,9 @@ const L = {
   en: { other: 'ગુજરાતી', title: 'Lab Timer', free: 'Free', tapStart: 'Tap to start',
     test: { MC: 'Moisture', VM: 'VM', ASH: 'Ash' },
     readyAt: t => `ready at ${t}`, samples: n => `${n} sample${n === 1 ? '' : 's'}`, snoozed: (n, m) => `snoozed ${n}× · +${m} min`,
-    waitingTitle: 'Waiting to go in', waitingSub: 'W2 saved, not in an oven or furnace yet. Oldest first.',
+    waitingTitle: 'Waiting to go in', waitingSub: 'W2 saved, not in an oven or furnace yet. Grouped by who prepared them (saved W2), oldest first.',
     outTitle: 'Taken out: weigh W3', outSub: 'These leave the list when W3 is saved in the weighing app.',
+    prepBy: w => `Prepared by ${w}`, noPrep: 'Name not recorded', onlyThese: n => `Tick only these ${n}`,
     nothingWaiting: 'Nothing waiting.', nothingOut: 'Nothing waiting for W3.', next: s => `next: ${s}`, full: 'all sections busy',
     startIn: s => `Start ${s}`, chooseTest: 'Which test is going in?', timeLbl: 'Timer', h: 'h', m: 'min',
     suggested: m => `Suggested: ${fmtDur(m)}`, resetSugg: 'Back to suggested time',
@@ -170,8 +173,9 @@ const L = {
   gu: { other: 'English', title: 'લેબ ટાઇમર', free: 'ખાલી', tapStart: 'શરૂ કરવા ટેપ કરો',
     test: { MC: 'ભેજ', VM: 'VM', ASH: 'રાખ' },
     readyAt: t => `${t} વાગ્યે તૈયાર`, samples: n => `${n} સેમ્પલ`, snoozed: (n, m) => `${n} વાર સ્નૂઝ · +${m} મિનિટ`,
-    waitingTitle: 'અંદર મૂકવાના બાકી', waitingSub: 'W2 સેવ થયું છે, હજી ઓવન/ફર્નેસમાં નથી. જૂના પહેલા.',
+    waitingTitle: 'અંદર મૂકવાના બાકી', waitingSub: 'W2 સેવ થયું છે, હજી ઓવન/ફર્નેસમાં નથી. કોણે તૈયાર કર્યા (W2 સેવ કર્યું) તે મુજબ, જૂના પહેલા.',
     outTitle: 'બહાર કાઢ્યા: W3 નું વજન કરો', outSub: 'વજન એપમાં W3 સેવ થતાં યાદીમાંથી નીકળી જશે.',
+    prepBy: w => `તૈયાર કરનાર: ${w}`, noPrep: 'નામ નોંધાયું નથી', onlyThese: n => `ફક્ત આ ${n} પસંદ કરો`,
     nothingWaiting: 'કંઈ બાકી નથી.', nothingOut: 'W3 માટે કંઈ બાકી નથી.', next: s => `હવે: ${s}`, full: 'બધા વિભાગ ચાલુ છે',
     startIn: s => `${s} શરૂ કરો`, chooseTest: 'કયો ટેસ્ટ અંદર જાય છે?', timeLbl: 'ટાઇમર', h: 'કલાક', m: 'મિનિટ',
     suggested: m => `સૂચવેલ: ${fmtDur(m)}`, resetSugg: 'સૂચવેલ સમય પર પાછા',
@@ -256,6 +260,24 @@ function w2Time(code, k) {
   const e = S.ts && S.ts[code] && S.ts[code][TS_NAME[k]] && S.ts[code][TS_NAME[k]].W2;
   return e ? Date.parse(e.at) : null;
 }
+// Who prepared a sample for a test = whoever saved its W2 in the weighing app
+function prepBy(code, k) {
+  const e = S.ts && S.ts[code] && S.ts[code][TS_NAME[k]] && S.ts[code][TS_NAME[k]].W2;
+  return e && e.by && e.by !== 'Unknown' ? String(e.by).trim() : '';
+}
+const prepKey = w => w.toLowerCase().replace(/\s+/g, ' ');
+// Codes split by who prepared them, keeping the list order inside each group; names not recorded go last
+function byPrep(codes, k) {
+  const m = new Map();
+  codes.forEach(c => { const w = prepBy(c, k), id = prepKey(w);
+    if (!m.has(id)) m.set(id, { id, who: w, codes: [] }); m.get(id).codes.push(c); });
+  return [...m.values()].sort((a, b) => (a.id === '') - (b.id === ''));
+}
+function prepHTML(codes, k, chip, extra) {
+  const t = T();
+  return byPrep(codes, k).map(g => `<div class="prep"><span>${esc(g.who ? t.prepBy(g.who) : t.noPrep)} · ${g.codes.length}</span>${extra ? extra(g) : ''}</div>
+    <div class="codes">${g.codes.map(chip).join('')}</div>`).join('');
+}
 const key = (c, k) => c + '|' + k;
 function claimed() {
   const set = new Set();
@@ -291,6 +313,7 @@ function logEntry(b) {
   return { id: b.id, sectionId: b.section, section: L.en.sec[b.section], test: b.test, testName: TS_NAME[b.test],
     // expected = the app's oldest-first guess at Start; the dashboard confirms the real batch from the W3 times
     capacity: sec.tests[b.test], expectedCount: b.samples.length, expected: b.samples, plannedMin: b.planned,
+    preparedBy: Object.fromEntries(b.samples.map(c => [c, prepBy(c, b.test) || null])),
     started: isoLocal(b.start), ready: isoLocal(b.end),
     events: (b.events || []).map(e => ({ type: e.type, at: isoLocal(e.at), min: e.min })),
     takenOut: b.out ? isoLocal(b.out) : null, stoppedEarly: !!b.early,
@@ -420,12 +443,12 @@ function listsHTML() {
     <div class="card"><h2>${esc(t.waitingTitle)}</h2><p class="sub">${esc(t.waitingSub)}</p>
       ${wait.length ? wait.map(x => `<div class="grp" style="${cvar(x.k)}"><i></i>${esc(t.test[x.k])} · ${x.list.length}
           <span class="meta" style="font-weight:400">(${esc(nextFree(x.k))})</span></div>
-        <div class="codes">${x.list.map(c => `<span class="code">${esc(c)}</span>`).join('')}</div>`).join('')
+        ${prepHTML(x.list, x.k, c => `<span class="code">${esc(c)}</span>`)}`).join('')
         : `<p class="none">${esc(t.nothingWaiting)}</p>`}</div>
     <div class="card"><h2>${esc(t.outTitle)}</h2><p class="sub">${esc(t.outSub)}</p>
       ${outs.length ? outs.map(b => `<div class="grp" style="${cvar(b.test)}"><i></i>${esc(secName(b.section))} · ${esc(t.test[b.test])}
           <span class="meta" style="font-weight:400">${esc(hm(b.out))}</span></div>
-        <div class="codes">${b.samples.map(c => `<span class="code ${stateOf(c, b.test) !== 'w2' ? 'done' : ''}">${esc(c)}</span>`).join('')}</div>`).join('')
+        ${prepHTML(b.samples, b.test, c => `<span class="code ${stateOf(c, b.test) !== 'w2' ? 'done' : ''}">${esc(c)}</span>`)}`).join('')
         : `<p class="none">${esc(t.nothingOut)}</p>`}</div>
   </div>`;
 }
@@ -440,7 +463,7 @@ function sheetHTML() {
       <div class="readout" id="sheet-cd" style="margin:10px 0">${countdown(b.end - Date.now())}</div>
       <div class="goin"><b>${esc(t.inside)} (${b.samples.length} / ${sec.tests[b.test]})</b>
         <p class="meta" style="margin:0 0 8px">${esc(t.editInside)}</p>
-        <div class="codes">${b.samples.map(c => `<button class="pick" aria-pressed="true" data-act="rm-inside" data-code="${esc(c)}">${esc(c)}<span class="x" aria-hidden="true">✕</span></button>`).join('') || '–'}</div>
+        ${b.samples.length ? prepHTML(b.samples, b.test, c => `<button class="pick" aria-pressed="true" data-act="rm-inside" data-code="${esc(c)}">${esc(c)}<span class="x" aria-hidden="true">✕</span></button>`) : '–'}
         ${waiting(b.test).length ? `<div class="codes" style="margin-top:8px">${waiting(b.test).slice(0, 24).map(c =>
             `<button class="pick" aria-pressed="false" style="text-decoration:none" data-act="add-inside" data-code="${esc(c)}">+ ${esc(c)}</button>`).join('')}</div>` : ''}
         <div class="addrow"><input id="newcode" placeholder="${esc(t.addPh)}" autocomplete="off" autocapitalize="characters"><button data-act="addcode">${esc(t.add)}</button></div>
@@ -468,7 +491,8 @@ function sheetHTML() {
     ${sh.min !== DEFAULT_MIN[test] ? `<button class="link" data-act="sugg">${esc(t.resetSugg)}</button>` : ''}
     <div class="goin"><b>${esc(t.goesIn(sh.sel.length, cap))}</b>
       ${shown.length ? `<p class="meta" style="margin:0 0 8px">${esc(t.pickHelp)}</p>
-        <div class="codes">${shown.map(c => `<button class="pick" data-act="toggle" data-code="${esc(c)}" aria-pressed="${sh.sel.includes(c)}">${esc(c)}</button>`).join('')}</div>
+        ${prepHTML(shown, test, c => `<button class="pick" data-act="toggle" data-code="${esc(c)}" aria-pressed="${sh.sel.includes(c)}">${esc(c)}</button>`,
+            g => `<button class="link" data-act="prep-only" data-who="${esc(g.id)}">${esc(t.onlyThese(Math.min(cap, g.codes.length)))}</button>`)}
         <div class="quick"><button class="link" data-act="oldest">${esc(t.oldest(Math.min(cap, shown.length)))}</button><button class="link" data-act="clearsel">${esc(t.clear)}</button></div>`
         : `<div class="warnbox" style="margin-top:0">${esc(t.noneWaiting)}</div>`}
       <div class="addrow"><input id="newcode" placeholder="${esc(t.addPh)}" autocomplete="off" autocapitalize="characters"><button data-act="addcode">${esc(t.add)}</button></div>
@@ -590,6 +614,10 @@ document.addEventListener('click', e => {
     case 'oldest': { const cap = SECTIONS.find(s => s.id === sh.sec).tests[sh.test];
       sh.sel = waiting(sh.test).concat(sh.extra).slice(0, cap); render(); break; }
     case 'clearsel': sh.sel = []; render(); break;
+    case 'prep-only': {          // tick just the samples one person prepared
+      const cap = SECTIONS.find(s => s.id === sh.sec).tests[sh.test];
+      sh.sel = waiting(sh.test).concat(sh.extra).filter(c => prepKey(prepBy(c, sh.test)) === el.dataset.who).slice(0, cap); render(); break;
+    }
     case 'addcode': addCode(); break;
     case 'rm-inside': {          // remove a code from a running batch
       const b = sectionBatch(sh.sec); if (!b) break;

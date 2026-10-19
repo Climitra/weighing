@@ -838,7 +838,7 @@ function parseW(str) {
   return v > 0 ? v : null;
 }
 // Results above these limits (%), or below zero (not possible), are flagged red.
-const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5 }, FLAG_LOW = 1.5;   // keep in step with LIMITS/LOWER in weighing-data compute_results.py
+const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5, TM: 60 }, FLAG_LOW = 1.5;   // keep in step with LIMITS/LOWER in weighing-data compute_results.py
 function isNeg(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct < 0; }
 function isLow(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct >= 0 && st.pct < FLAG_LOW; }
 function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && (st.pct > FLAG[k] || st.pct < FLAG_LOW); }
@@ -1120,7 +1120,7 @@ function renderSetup() {
 
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
-        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 %, below 1.5 % or negative are marked red.</p>
+        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 %, Total moisture above 60 %, any below 1.5 % or negative are marked red.</p>
         <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = outside limits)</button>
         <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
       <div class="row" style="display:block"><b>Results files on GitHub</b>

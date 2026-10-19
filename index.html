@@ -54,6 +54,7 @@
   .apprtick { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--ok); color: #fff; font-size: 1rem; display: grid; place-items: center; }
   .sample .info, .info { color: var(--muted); font-size: .95rem; margin-top: 2px; line-height: 1.3; overflow-wrap: anywhere; }
   .info b { color: var(--ink); font-weight: 600; }
+  .lastupd { color: var(--muted); font-size: .8rem; margin-top: 8px; overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .chip { font-size: .85rem; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); }
   .chip.prog { background: var(--c-bg); color: var(--c); border-color: var(--c); }
@@ -234,6 +235,8 @@ const L = {
     apprTap: 'Tap again to approve',
     apprBy: (by, d) => `✓ Approved by ${by} · ${d}`,
     apprTick: 'Approved',
+    lastUpd: 'Last update',
+    lastAppr: 'approved',
     apprUndo: 'Remove approval',
     apprStale: 'Weights changed after approval. Approve again.',
     apprSaved: 'Approved. It goes into the results file within 15 minutes.',
@@ -317,6 +320,8 @@ const L = {
     apprTap: 'મંજૂર કરવા ફરી ટેપ કરો',
     apprBy: (by, d) => `✓ ${by} દ્વારા મંજૂર · ${d}`,
     apprTick: 'મંજૂર',
+    lastUpd: 'છેલ્લો ફેરફાર',
+    lastAppr: 'મંજૂર',
     apprUndo: 'મંજૂરી રદ કરો',
     apprStale: 'મંજૂરી પછી વજન બદલાયા છે. ફરી મંજૂર કરો.',
     apprSaved: 'મંજૂર થયું. 15 મિનિટમાં પરિણામ ફાઇલમાં જશે.',
@@ -898,6 +903,18 @@ function listed() {
   return S.data.samples.filter(s =>
     (S.showDone || s.status !== 'Complete') && (!q || s.code.toLowerCase().includes(q) || searchText(s.code).includes(q)));
 }
+// Small line on each card: the latest change to the sample (a weight, reset or approval), from data the app already has
+function lastHTML(s) {
+  const t = T(), a = approvalOf(s);
+  let txt = '';
+  if (a) {   // a valid approval covers the current weights, so it is newer than any of them
+    txt = `${t.lastAppr} · ${a.by} · ${stamp(a.at)}`;
+  } else if (s.last) {
+    const [who, what, when] = s.last.split(' | ');
+    txt = when ? `${what} · ${who} · ${when}` : s.last;
+  }
+  return txt ? `<div class="lastupd">${esc(t.lastUpd)}: ${esc(txt)}</div>` : '';
+}
 function listHTML() {
   const q = S.query.trim().toLowerCase();
   const list = listed();
@@ -906,7 +923,7 @@ function listHTML() {
   return list.map(s => `
     <button class="sample${flagsOf(s).length ? ' flag' : ''}" data-act="open-sample" data-code="${esc(s.code)}">
       <div class="code"><span>${esc(s.code)}</span>${approvalOf(s) ? `<span class="apprtick" role="img" aria-label="${esc(T().apprTick)}" title="${esc(T().apprTick)}">✓</span>` : ''}</div>${infoHTML(s.code)}
-      <div class="chips">${S.order.filter(k => s.tests[k].required).map(k => chip(k, s.tests[k])).join('')}</div>
+      <div class="chips">${S.order.filter(k => s.tests[k].required).map(k => chip(k, s.tests[k])).join('')}</div>${lastHTML(s)}
     </button>`).join('');
 }
 

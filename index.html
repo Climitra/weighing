@@ -49,7 +49,9 @@
 
   .sample.last, .testbtn.last { outline: 3px solid #2b6cb0; outline-offset: 2px; }
   .sample { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
-  .sample .code { font-size: 1.5rem; font-weight: 700; }
+  .sample .code { font-size: 1.5rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* approved: small green tick so you can see it without opening the card */
+  .apprtick { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--ok); color: #fff; font-size: 1rem; display: grid; place-items: center; }
   .sample .info, .info { color: var(--muted); font-size: .95rem; margin-top: 2px; line-height: 1.3; overflow-wrap: anywhere; }
   .info b { color: var(--ink); font-weight: 600; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -231,6 +233,7 @@ const L = {
     apprBtn: 'Approve result',
     apprTap: 'Tap again to approve',
     apprBy: (by, d) => `✓ Approved by ${by} · ${d}`,
+    apprTick: 'Approved',
     apprUndo: 'Remove approval',
     apprStale: 'Weights changed after approval. Approve again.',
     apprSaved: 'Approved. It goes into the results file within 15 minutes.',
@@ -313,6 +316,7 @@ const L = {
     apprBtn: 'પરિણામ મંજૂર કરો',
     apprTap: 'મંજૂર કરવા ફરી ટેપ કરો',
     apprBy: (by, d) => `✓ ${by} દ્વારા મંજૂર · ${d}`,
+    apprTick: 'મંજૂર',
     apprUndo: 'મંજૂરી રદ કરો',
     apprStale: 'મંજૂરી પછી વજન બદલાયા છે. ફરી મંજૂર કરો.',
     apprSaved: 'મંજૂર થયું. 15 મિનિટમાં પરિણામ ફાઇલમાં જશે.',
@@ -901,7 +905,7 @@ function listHTML() {
     return `<div class="empty">${esc(q ? T().noMatch(S.query) : S.data.samples.length ? T().allDone : T().noCodes)}</div>`;
   return list.map(s => `
     <button class="sample${flagsOf(s).length ? ' flag' : ''}" data-act="open-sample" data-code="${esc(s.code)}">
-      <div class="code">${esc(s.code)}</div>${infoHTML(s.code)}
+      <div class="code"><span>${esc(s.code)}</span>${approvalOf(s) ? `<span class="apprtick" role="img" aria-label="${esc(T().apprTick)}" title="${esc(T().apprTick)}">✓</span>` : ''}</div>${infoHTML(s.code)}
       <div class="chips">${S.order.filter(k => s.tests[k].required).map(k => chip(k, s.tests[k])).join('')}</div>
     </button>`).join('');
 }

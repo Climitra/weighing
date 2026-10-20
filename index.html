@@ -395,12 +395,12 @@ Object.assign(L.gu, {
 });
 Object.assign(L.en, {
   machAll: 'All machines', machHint: 'Tap to choose your weighing machine',
-  machLine: (m, n) => (m === 'ALL' ? 'Showing only samples marked ALL or not given to a machine' : `Showing samples for ${m} and ALL`) + (n ? ` · ${n} others hidden` : ''),
+  machLine: (m, n) => (m === 'ALL' ? 'Showing only samples marked ALL or not given to a machine' : `Showing only samples for ${m}`) + (n ? ` · ${n} others hidden` : ''),
   machNone: m => `No samples allocated to ${m}. Allocate them in the Machine column of the sheet.`
 });
 Object.assign(L.gu, {
   machAll: 'બધા મશીન', machHint: 'તમારું વજન કાંટો (મશીન) પસંદ કરવા ટેપ કરો',
-  machLine: (m, n) => (m === 'ALL' ? 'ફક્ત ALL અથવા કોઈ મશીનને ન ફાળવેલ સેમ્પલ દેખાય છે' : `${m} અને ALL ના સેમ્પલ દેખાય છે`) + (n ? ` · બીજા ${n} છુપાવ્યા` : ''),
+  machLine: (m, n) => (m === 'ALL' ? 'ફક્ત ALL અથવા કોઈ મશીનને ન ફાળવેલ સેમ્પલ દેખાય છે' : `ફક્ત ${m} ના સેમ્પલ દેખાય છે`) + (n ? ` · બીજા ${n} છુપાવ્યા` : ''),
   machNone: m => `${m} માટે કોઈ સેમ્પલ ફાળવેલ નથી. શીટના Machine કોલમમાં ફાળવો.`
 });
 Object.assign(L.en, { noCodes: 'No sample codes yet. The supervisor adds them with ⚙ Setup.' });
@@ -692,7 +692,7 @@ function fmtDate(d) {
 function nameOf(code) { return NAMES[code] || NAMES[String(code).toUpperCase()] || null; }
 /* ---------- weighing machine (W1–W4), chosen per phone in Setup ----------
    The Machine column of the Name Tags sheet comes through names.json as e.g. "W2", "ALL" or "W1, W3".
-   With W1–W4 chosen, a sample shows only if its cell names that machine or says ALL.
+   With W1–W4 chosen, a sample shows only if its cell names that machine.
    Choosing ALL shows the remaining samples: those marked ALL, left blank, or not in the sheet yet.
    With no machine chosen, every sample shows. */
 const MACHINES = ['W1', 'W2', 'W3', 'W4'];
@@ -704,7 +704,7 @@ function forMachine(code) {
   if (!S.machine) return true;
   const m = machinesOf(code);
   if (S.machine === 'ALL') return !m.length || m.includes('ALL');
-  return m.includes('ALL') || m.includes(S.machine);
+  return m.includes(S.machine);
 }
 function infoHTML(code, cls = 'info') {
   const n = nameOf(code); if (!n) return '';
@@ -1151,7 +1151,7 @@ function renderSetup() {
 
     <div class="prev" style="margin-top:0">
       <div class="row" style="display:block"><b>Weighing machine on this phone</b>
-        <p class="sub" style="margin:4px 0 8px">The sample list then shows only the samples given to this machine in the Machine column of the sheet, plus samples marked ALL. ALL shows the samples marked ALL or not given to any machine.</p>
+        <p class="sub" style="margin:4px 0 8px">The sample list then shows only the samples given to this machine in the Machine column of the sheet. ALL shows the samples marked ALL or not given to any machine.</p>
         <div class="toggle mpick">${[...MACHINES, 'ALL'].map(m => `<button aria-pressed="${S.machine === m}" data-act="machine" data-val="${m}">${m}</button>`).join('')}</div>
         ${S.machine ? '<button class="link" data-act="machine" data-val="">Show every sample (no machine)</button>' : '<p class="sub" style="margin:0">No machine chosen: every sample is shown.</p>'}</div>
     </div>

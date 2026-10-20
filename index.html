@@ -395,12 +395,12 @@ Object.assign(L.gu, {
 });
 Object.assign(L.en, {
   machAll: 'All machines', machHint: 'Tap to choose your weighing machine',
-  machLine: (m, n) => `Showing samples for ${m} and ALL` + (n ? ` · ${n} for other machines hidden` : ''),
+  machLine: (m, n) => (m === 'ALL' ? 'Showing only samples marked ALL or not given to a machine' : `Showing samples for ${m} and ALL`) + (n ? ` · ${n} for other machines hidden` : ''),
   machNone: m => `No samples allocated to ${m}.`
 });
 Object.assign(L.gu, {
   machAll: 'બધા મશીન', machHint: 'તમારું વજન કાંટો (મશીન) પસંદ કરવા ટેપ કરો',
-  machLine: (m, n) => `${m} અને ALL ના સેમ્પલ દેખાય છે` + (n ? ` · બીજા મશીનના ${n} છુપાવ્યા` : ''),
+  machLine: (m, n) => (m === 'ALL' ? 'ફક્ત ALL અથવા કોઈ મશીનને ન ફાળવેલ સેમ્પલ દેખાય છે' : `${m} અને ALL ના સેમ્પલ દેખાય છે`) + (n ? ` · બીજા મશીનના ${n} છુપાવ્યા` : ''),
   machNone: m => `${m} માટે કોઈ સેમ્પલ ફાળવેલ નથી.`
 });
 Object.assign(L.en, { noCodes: 'No sample codes yet. The supervisor adds them with ⚙ Setup.' });
@@ -692,7 +692,8 @@ function fmtDate(d) {
 function nameOf(code) { return NAMES[code] || NAMES[String(code).toUpperCase()] || null; }
 /* ---------- weighing machine (W1–W4), chosen per phone in Setup ----------
    The Machine column of the Name Tags sheet comes through names.json as e.g. "W2", "ALL" or "W1, W3".
-   A sample shows on this phone if no machine is chosen, its cell is blank, it says ALL, or it names this machine. */
+   A sample shows on this phone if no machine is chosen, its cell is blank, it says ALL, or it names this machine.
+   Choosing ALL shows only the remaining samples: those marked ALL or left blank. */
 const MACHINES = ['W1', 'W2', 'W3', 'W4'];
 function machinesOf(code) {
   const n = nameOf(code);
@@ -1148,8 +1149,9 @@ function renderSetup() {
 
     <div class="prev" style="margin-top:0">
       <div class="row" style="display:block"><b>Weighing machine on this phone</b>
-        <p class="sub" style="margin:4px 0 8px">The sample list then shows only the samples given to this machine in the Machine column of the sheet, plus samples marked ALL or left blank.</p>
-        <div class="toggle mpick">${['', ...MACHINES].map(m => `<button aria-pressed="${(S.machine || '') === m}" data-act="machine" data-val="${m}">${m || 'All'}</button>`).join('')}</div></div>
+        <p class="sub" style="margin:4px 0 8px">The sample list then shows only the samples given to this machine in the Machine column of the sheet, plus samples marked ALL or left blank. ALL shows only those remaining samples.</p>
+        <div class="toggle mpick">${[...MACHINES, 'ALL'].map(m => `<button aria-pressed="${S.machine === m}" data-act="machine" data-val="${m}">${m}</button>`).join('')}</div>
+        ${S.machine ? '<button class="link" data-act="machine" data-val="">Show every sample (no machine)</button>' : '<p class="sub" style="margin:0">No machine chosen: every sample is shown.</p>'}</div>
     </div>
 
     <div class="prev">
@@ -1666,7 +1668,7 @@ document.addEventListener('click', e => {
     }
     case 'refresh': load(true); break;
     case 'setup': S.view = 'setup'; render(); break;
-    case 'machine': S.machine = el.dataset.val || ''; store.set('machine', S.machine); render(); toast(S.machine ? `This phone is now ${S.machine}.` : 'Showing samples for all machines.', true); break;
+    case 'machine': S.machine = el.dataset.val || ''; store.set('machine', S.machine); render(); toast(S.machine ? `This phone is now ${S.machine}.` : 'Showing every sample.', true); break;
     case 'setup-done': S.view = S.worker ? 'home' : 'name'; if (S.data) render(); else renderNotReady(); load(false); break;
     case 'save-key': saveKey(); break;
     case 'forget-key': if (confirmTap(el)) { KEY = ''; store.set('ghkey', ''); S.syncErr = null; render(); showSync(); } break;

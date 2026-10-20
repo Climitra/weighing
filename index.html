@@ -168,12 +168,23 @@
           max-width: 92%; }
   #sync.ok { background: #dff3e6; color: var(--ok); }
   #sync.bad { background: #fde2e1; color: var(--err); }
+  /* photo of an out-of-range result, kept with the sample */
+  .photobox { margin-top: 10px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); }
+  .photobox > p { margin: 0 0 6px; font-weight: 700; }
+  .photobox .prow { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .9rem; color: var(--muted); }
+  .photobox .prow b { color: var(--ink); }
+  .photobox .need { color: var(--err); font-weight: 700; font-size: .95rem; margin: 0 0 8px; }
+  .photobox button.primary, .photobox button.secondary { width: 100%; margin-top: 8px; padding: 14px; }
+  .photoask { margin: 12px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--base); }
+  .photoask p { margin: 0 0 4px; font-weight: 700; }
+  .viewer img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: 12px; background: #000; }
   .install { background: var(--ok); color: #fff; border-color: var(--ok); font-weight: 700; }
   html[lang="gu"] body { line-height: 1.5; }
 </style>
 </head>
 <body>
 <button id="sync" type="button" hidden></button>
+<input type="file" id="photofile" accept="image/*" capture="environment" hidden>
 <div class="wrap" id="app"><div class="empty">Loading…</div></div>
 
 <script>
@@ -425,6 +436,30 @@ Object.assign(L.gu, {
   cachedList: 'ફોનમાં સેવ થયેલી યાદી દેખાય છે. ઇન્ટરનેટ મળતાં અપડેટ થશે.',
   prevCard: 'પાછલું સેમ્પલ', nextCard: 'આગલું સેમ્પલ'
 });
+Object.assign(L.en, {
+  phAsk: l => `${l} is out of range. Take a photo of the crucible for the record.`,
+  phAskSub: 'It is saved with the sample code. Skip only if a photo is not possible.',
+  phTake: '📷 Take photo', phSkip: 'Skip photo', phMore: '📷 Add another photo', phRetake: '📷 Take photo now',
+  phTitle: l => `📷 ${l} photos`, phNeed: 'No photo for this result yet.',
+  phBy: (by, d) => `by ${by} · ${d}`, phView: 'View', phClose: 'Close',
+  phSkipped: (by, d) => `Photo skipped by ${by} · ${d}`,
+  phWaiting: 'waiting to upload', phSaved: 'Photo saved. It uploads in the background.',
+  phSkipDone: 'Photo skipped. This is noted on the sample.', phBusy: 'Saving photo…',
+  phFail: 'Could not use that photo. Try again.', phLoadFail: 'Could not open the photo. Check the internet.',
+  phLoading: 'Loading photo…', phOld: 'earlier weights'
+});
+Object.assign(L.gu, {
+  phAsk: l => `${l} મર્યાદા બહાર છે. રેકોર્ડ માટે ક્રુસિબલનો ફોટો લો.`,
+  phAskSub: 'ફોટો સેમ્પલ કોડ સાથે સેવ થશે. ફોટો શક્ય ન હોય તો જ છોડો.',
+  phTake: '📷 ફોટો લો', phSkip: 'ફોટો છોડો', phMore: '📷 બીજો ફોટો ઉમેરો', phRetake: '📷 હમણાં ફોટો લો',
+  phTitle: l => `📷 ${l} ફોટા`, phNeed: 'આ પરિણામનો હજી ફોટો નથી.',
+  phBy: (by, d) => `${by} · ${d}`, phView: 'જુઓ', phClose: 'બંધ કરો',
+  phSkipped: (by, d) => `${by} એ ફોટો છોડ્યો · ${d}`,
+  phWaiting: 'અપલોડ બાકી', phSaved: 'ફોટો સેવ થયો. પાછળથી અપલોડ થશે.',
+  phSkipDone: 'ફોટો છોડ્યો. સેમ્પલ પર નોંધ થઈ.', phBusy: 'ફોટો સેવ થઈ રહ્યો છે…',
+  phFail: 'આ ફોટો વાપરી શકાયો નહીં. ફરી પ્રયત્ન કરો.', phLoadFail: 'ફોટો ખુલ્યો નહીં. ઇન્ટરનેટ તપાસો.',
+  phLoading: 'ફોટો લોડ થાય છે…', phOld: 'જૂના વજન'
+});
 const T = () => L[S.lang] || L.en;
 const lbl = k => T().label[k] || S.tests[k].label;
 const ves = k => T().vessel[k] || S.tests[k].vessel;
@@ -623,6 +658,9 @@ function fileApply(f, j) {
     s.last = `${j.worker || 'Unknown'} | ${TESTS[j.key].label} W${j.step} | ${stamp(j.at)}`;
   } else if (j.action === 'setTmRequired') {
     fileSample(f, j.code).tm = !!j.value;
+  } else if (j.action === 'photo') {          // a photo (or a skipped photo) of an out-of-range result
+    const s = fileSample(f, j.code);
+    s.photos = (s.photos || []).filter(p => p.id !== j.rec.id).concat([j.rec]);
   } else if (j.action === 'addCodes') {
     j.codes.forEach(c => fileSample(f, c));
   } else if (j.action === 'resetTest') {
@@ -649,7 +687,7 @@ function fileApply(f, j) {
 function toData(f) {
   const samples = f.codes.filter(c => f.samples[c]).map(code => {
     const fs = f.samples[code];
-    const s = { code, tmRequired: !!fs.tm, last: fs.last || '', tests: {} };
+    const s = { code, tmRequired: !!fs.tm, last: fs.last || '', photos: fs.photos || [], tests: {} };
     ORDER.forEach(k => { s.tests[k] = { w: fs.w[k].slice(), pct: isNum(fs.pct[k]) ? fs.pct[k] : null, done: 0, required: true }; });
     recompute(s);
     return s;
@@ -764,6 +802,141 @@ function approvalHTML(s) {
       <button class="primary" data-act="approve">${esc(t.apprBtn)}</button></div>`;
 }
 
+/* ---------- photos of out-of-range results (Ash) ----------
+   When a W3 makes the result go out of range, the worker is asked for a photo of the crucible.
+   The picture goes to weighing-data photos/<code>/<code>-<test>-<date>.jpg (one GitHub call per photo),
+   and data.json samples[code].photos lists it: { id, test, path, at, by, pct, w } or { ..., skipped: true }.
+   Photos wait on the phone (IndexedDB) until they are uploaded, so no internet is needed to take one. */
+const PHOTO_TESTS = ['ASH'];
+const PHOTO_PX = 1600, PHOTO_Q = 0.8;
+let PENDING = new Set();                     // paths still on this phone
+const photoDB = (() => {
+  let db = null;
+  const open = () => db || (db = new Promise((ok, bad) => {
+    const r = indexedDB.open('weighing-photos', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('pending', { keyPath: 'path' });
+    r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error);
+  }));
+  const tx = (mode, fn) => open().then(d => new Promise((ok, bad) => {
+    const t = d.transaction('pending', mode), st = t.objectStore('pending'), r = fn(st);
+    t.oncomplete = () => ok(r && r.result); t.onerror = () => bad(t.error);
+  }));
+  return {
+    put: v => tx('readwrite', st => st.put(v)),
+    del: path => tx('readwrite', st => st.delete(path)),
+    get: path => tx('readonly', st => st.get(path)),
+    all: () => tx('readonly', st => st.getAll())
+  };
+})();
+const MEMPHOTO = {};                         // fallback when IndexedDB is not available, and a cache of viewed photos
+const photoKey = (s, k) => JSON.stringify(s.tests[k].w.slice(0, 3));
+// The photos/skips of one test, and whether the current weights still need one
+function photosOf(s, k) { return (s.photos || []).filter(p => p.test === k); }
+function needsPhoto(s, k) {
+  if (!PHOTO_TESTS.includes(k) || !s || !s.tests[k] || s.tests[k].done !== 3 || !isFlag(k, s.tests[k])) return false;
+  const now = photoKey(s, k);
+  return !photosOf(s, k).some(p => JSON.stringify(p.w) === now);
+}
+function photoStamp(ms) { const d = new Date(ms), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+function photoRec(s, k, extra) {
+  const st = s.tests[k], at = Date.now();
+  return Object.assign({ id: at + '-' + Math.random().toString(36).slice(2, 6), test: k, at: isoLocal(at), by: S.worker || 'Unknown',
+    pct: isNum(st.pct) ? st.pct : null, w: st.w.slice(0, 3) }, extra);
+}
+// Shrink the camera picture to about 1600 px (a few hundred kB), turned the right way up
+async function shrinkPhoto(file) {
+  let img;
+  try { img = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch (e) {
+    img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = URL.createObjectURL(file); });
+  }
+  const w = img.width, h = img.height, f = Math.min(1, PHOTO_PX / Math.max(w, h));
+  const c = document.createElement('canvas'); c.width = Math.round(w * f); c.height = Math.round(h * f);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return new Promise((ok, bad) => c.toBlob(b => b ? ok(b) : bad(new Error('no image')), 'image/jpeg', PHOTO_Q));
+}
+function blobB64(blob) {
+  return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = bad; r.readAsDataURL(blob); });
+}
+async function takePhoto(file) {
+  const target = S.photoFor; S.photoFor = null;
+  const s = target && sample(target.code);
+  if (!file || !s) return;
+  S.busy = true; render(); toast(T().phBusy, true);
+  try {
+    const blob = await shrinkPhoto(file);
+    const k = target.test, rec = photoRec(s, k), stamp8 = photoStamp(Date.now());
+    rec.path = `photos/${s.code}/${s.code}-${k}-${stamp8}.jpg`;
+    const item = { path: rec.path, blob, code: s.code, test: k, by: rec.by };
+    try { await photoDB.put(item); } catch (e) { MEMPHOTO[rec.path] = item; }
+    PENDING.add(rec.path); MEMPHOTO[rec.path] = MEMPHOTO[rec.path] || { blob };
+    enqueue({ action: 'photo', code: s.code, rec, worker: S.worker });
+    if (S.modal && S.modal.type === 'saved') afterSaved();
+    toast(T().phSaved, true);
+    uploadPhotos();
+  } catch (e) { toast(T().phFail); }
+  S.busy = false; render();
+}
+function skipPhoto() {
+  const s = sample(S.code); if (!s) return;
+  enqueue({ action: 'photo', code: s.code, rec: photoRec(s, S.test, { skipped: true }), worker: S.worker });
+  toast(T().phSkipDone, true);
+}
+// Send the photos waiting on this phone, one GitHub call each
+let uploading = false, uploadTimer = null;
+async function uploadPhotos() {
+  clearTimeout(uploadTimer); uploadTimer = null;
+  if (uploading || !KEY) return;
+  uploading = true;
+  let items = [];
+  try { items = await photoDB.all(); } catch (e) {}
+  Object.values(MEMPHOTO).forEach(m => { if (m.path && !items.some(i => i.path === m.path)) items.push(m); });
+  PENDING = new Set(items.map(i => i.path));
+  for (const it of items) {
+    try {
+      await gh('PUT', `${API}/contents/${it.path}`, { message: `photo: ${it.code} ${TESTS[it.test] ? TESTS[it.test].label : it.test} by ${it.by}`, branch: GH.branch, content: await blobB64(it.blob) });
+    } catch (e) {
+      if (e.code !== 'CONFLICT') { if (e.code !== 'KEY') uploadTimer = setTimeout(uploadPhotos, 60000); break; }   // CONFLICT: it is already there
+    }
+    try { await photoDB.del(it.path); } catch (e) {}
+    if (MEMPHOTO[it.path] && MEMPHOTO[it.path].path) delete MEMPHOTO[it.path].path;
+    PENDING.delete(it.path);
+  }
+  uploading = false;
+  if (S.view === 'sample' && !S.modal) render();
+}
+async function viewPhoto(path) {
+  const rec = (sample(S.code).photos || []).find(p => p.path === path);
+  S.modal = { type: 'photo', rec, url: null }; render();
+  try {
+    let blob = MEMPHOTO[path] && MEMPHOTO[path].blob;
+    if (!blob) { try { const it = await photoDB.get(path); blob = it && it.blob; } catch (e) {} }
+    if (!blob) blob = await (await gh('GET', `${API}/contents/${path}?ref=${GH.branch}`, null, 'application/vnd.github.raw+json')).blob();
+    MEMPHOTO[path] = Object.assign(MEMPHOTO[path] || {}, { blob });
+    if (S.modal && S.modal.type === 'photo' && S.modal.rec === rec) { S.modal.url = URL.createObjectURL(blob); render(); }
+  } catch (e) {
+    if (S.modal && S.modal.type === 'photo') { S.modal = null; render(); toast(T().phLoadFail); }
+  }
+}
+function photoBoxHTML(s) {
+  const t = T();
+  return PHOTO_TESTS.filter(k => s.tests[k] && (needsPhoto(s, k) || photosOf(s, k).length)).map(k => {
+    const now = photoKey(s, k);
+    const rows = photosOf(s, k).slice().reverse().map(p => {
+      const old = JSON.stringify(p.w) !== now ? ` · ${esc(t.phOld)}` : '';
+      const pct = isNum(p.pct) ? ` · ${p.pct.toFixed(2)} %` : '';
+      if (p.skipped) return `<div class="prow"><span>${esc(t.phSkipped(p.by, stamp(p.at)))}${pct}${old}</span></div>`;
+      return `<div class="prow"><span><b>${esc(stamp(p.at))}</b> · ${esc(p.by)}${pct}${old}${PENDING.has(p.path) ? ` · <i>${esc(t.phWaiting)}</i>` : ''}</span>
+        <button class="link" data-act="photo-view" data-path="${esc(p.path)}">${esc(t.phView)}</button></div>`;
+    }).join('');
+    const need = needsPhoto(s, k);
+    return `<div class="photobox" style="${cvar(k)}"><p>${esc(t.phTitle(lbl(k)))}</p>
+      ${need ? `<p class="need">${esc(t.phNeed)}</p>` : ''}${rows}
+      <button class="${need ? 'primary' : 'secondary'}" data-act="photo-take" data-test="${k}">${esc(need ? t.phRetake : t.phMore)}</button></div>`;
+  }).join('');
+}
+
 function cacheFile() { if (S.file) store.set('file', JSON.stringify(S.file)); }
 
 const r2 = x => Math.round(x * 100) / 100;
@@ -802,6 +975,7 @@ function commitMessage(batch) {
   const first = batch[0];
   const what = first.action === 'saveWeight' ? `${first.code} ${TESTS[first.key].label} W${first.step}`
              : first.action === 'resetTest' ? `${first.code} ${TESTS[first.key].label} reset`
+             : first.action === 'photo' ? `${first.code} ${TESTS[first.rec.test].label} photo${first.rec.skipped ? ' skipped' : ''}`
              : first.action === 'addCodes' ? `add ${first.codes.length} code(s)`
              : first.action === 'importRows' ? `import ${first.rows.length} row(s)` : `${first.action} ${first.code || ''}`;
   return `${what}${batch.length > 1 ? ` (+${batch.length - 1} more)` : ''} by ${first.worker || S.worker || 'app'}`;
@@ -1022,7 +1196,7 @@ function renderSample() {
       ${s.tmRequired ? testBtn(s, tmK) : ''}</div>` : '';
   return `<div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="home">${esc(t.allSamples)}</button>${langBtn()}</div>
-    ${navHTML()}<h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}${flagsOf(s).length ? `<div class="flagnote">${esc(t.flagNote(flagsOf(s).map(lbl).join(', ')))}</div>` : ''}${approvalHTML(s)}
+    ${navHTML()}<h2 class="title">${esc(s.code)}</h2>${infoHTML(s.code)}${flagsOf(s).length ? `<div class="flagnote">${esc(t.flagNote(flagsOf(s).map(lbl).join(', ')))}</div>` : ''}${approvalHTML(s)}${photoBoxHTML(s)}
     <p class="sub" style="margin-top:8px">${esc(t.chooseTest)}</p>
     <div class="list">${main}</div>${tm}`;
 }
@@ -1416,6 +1590,8 @@ document.addEventListener('change', e => {
   e.target.value = '';
 });
 
+document.getElementById('photofile').addEventListener('change', e => { takePhoto(e.target.files && e.target.files[0]); });
+
 function renderModal() {
   const m = S.modal;
   if (!m) return '';
@@ -1427,6 +1603,11 @@ function renderModal() {
         <button class="secondary" data-act="cancel">${esc(t.cancel)}</button>
         <button class="primary danger" data-act="do-reset">${esc(t.yesReset)}</button>
       </div></div></div>`;
+  if (m.type === 'photo') { const p = m.rec || {};
+    return `<div class="modal" data-act="photo-close"><div class="sheet viewer" role="dialog" aria-modal="true">
+      <p class="sub" style="margin:0 0 8px">${esc(S.code)} · ${esc(lbl(p.test || 'ASH'))}${isNum(p.pct) ? ` · ${p.pct.toFixed(2)} %` : ''} · ${esc(p.by || '')} · ${esc(p.at ? stamp(p.at) : '')}</p>
+      ${m.url ? `<img src="${m.url}" alt="${esc(S.code)} ${esc(lbl(p.test || 'ASH'))}">` : `<div class="empty">${esc(t.phLoading)}</div>`}
+      <div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="photo-close">${esc(t.phClose)}</button></div></div></div>`; }
   if (m.type === 'confirm') return `<div class="modal" style="${cvar(k)}"><div class="sheet" role="dialog" aria-modal="true">
       <p class="sub" style="margin:0">${esc(S.code)}, ${esc(lbl(k))}, W${S.step}: ${esc(wLabel(k, S.step - 1))}</p>
       <div class="big">${esc(m.raw)} g</div>
@@ -1438,10 +1619,15 @@ function renderModal() {
   return `<div class="modal" style="${cvar(k)}"><div class="sheet" role="dialog" aria-modal="true">
       <div class="tick" aria-hidden="true">✓</div>
       <p class="instr">${esc(savedMsg(m))}</p>${flagMsg(m)}
-      <div class="btnrow"><button class="primary" data-act="after">${esc(m.next === 'step2' ? t.enterW2 : t.ok)}</button></div>
+      ${askPhoto(m) ? `<div class="photoask"><p>${esc(t.phAsk(lbl(k)))}</p><p class="sub" style="margin:0">${esc(t.phAskSub)}</p></div>
+      <div class="btnrow"><button class="secondary" data-act="photo-skip" ${S.busy ? 'disabled' : ''}>${esc(t.phSkip)}</button>
+        <button class="primary" data-act="photo-take" data-test="${k}" ${S.busy ? 'disabled' : ''}>${esc(S.busy ? t.phBusy : t.phTake)}</button></div>`
+      : `<div class="btnrow"><button class="primary" data-act="after">${esc(m.next === 'step2' ? t.enterW2 : t.ok)}</button></div>`}
     </div></div>`;
 }
 
+// Right after the W3 that puts the result out of range: ask for a photo instead of just OK
+function askPhoto(m) { return (m.kind === 's3' || m.kind === 'corrected') && needsPhoto(sample(S.code), S.test); }
 function flagMsg(m) {
   if (m.kind !== 's3' && m.kind !== 'corrected') return '';
   const st = sample(S.code) && sample(S.code).tests[S.test];
@@ -1454,6 +1640,12 @@ function savedMsg(m) {
   if (m.kind === 's1') return t.saved1(ves(k));
   if (m.kind === 's2') return t.saved2(ves(k), heat(k));
   return isNum(m.pct) ? t.saved3(lbl(k), m.pct.toFixed(2)) : t.saved3vm(lbl(k));
+}
+
+function afterSaved() {
+  const next = S.modal && S.modal.next; S.modal = null;
+  if (next === 'step2') { S.step = 2; S.draft = ''; S.editing = false; S.view = 'step'; }
+  else S.view = 'sample';
 }
 
 function savePos() {
@@ -1662,11 +1854,17 @@ document.addEventListener('click', e => {
       break;
     }
     case 'confirm': doSave(); break;
-    case 'after': {
-      const next = S.modal.next; S.modal = null;
-      if (next === 'step2') { S.step = 2; S.draft = ''; S.editing = false; S.view = 'step'; }
-      else S.view = 'sample';
-      render(); break;
+    case 'after': afterSaved(); render(); break;
+    case 'photo-take': {
+      S.photoFor = { code: S.code, test: el.dataset.test || S.test };
+      const inp = document.getElementById('photofile'); inp.value = ''; inp.click(); break;
+    }
+    case 'photo-skip': skipPhoto(); afterSaved(); render(); break;
+    case 'photo-view': viewPhoto(el.dataset.path); break;
+    case 'photo-close': {
+      if (el.classList.contains('modal') && e.target !== el) break;   // a tap on the picture itself keeps it open
+      if (S.modal && S.modal.url) URL.revokeObjectURL(S.modal.url);
+      S.modal = null; render(); break;
     }
     case 'refresh': load(true); break;
     case 'setup': S.view = 'setup'; render(); break;
@@ -1742,7 +1940,7 @@ window.addEventListener('appinstalled', () => { installEvt = null; if (!S.modal)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.view === 'home' && !S.modal && !S.busy && S.data) load(false);
 });
-window.addEventListener('online', () => { syncFails = 0; sync(); });
+window.addEventListener('online', () => { syncFails = 0; sync(); uploadPhotos(); });
 window.addEventListener('online', () => { if (S.view === 'home' && !S.busy && S.worker) load(false); });
 // Pick up other phones' work every minute while the list is on screen
 setInterval(() => {
@@ -1760,7 +1958,7 @@ setInterval(() => {
 })();
 S.tests = TESTS; S.order = ORDER;
 S.file = readJSON('file', null); S.fileSha = store.get('fileSha');
-setTimeout(syncTs, 1500); setTimeout(syncLog, 2500);
+setTimeout(syncTs, 1500); setTimeout(syncLog, 2500); setTimeout(uploadPhotos, 3500);
 if (S.file && S.file.codes) rebuild();
 if (S.worker) { if (S.data) render(); else renderNotReady(); load(); sync(); } else render();
 showSync();

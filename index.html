@@ -54,6 +54,10 @@
   .apprtick { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--ok); color: #fff; font-size: 1rem; display: grid; place-items: center; }
   .sample .info, .info { color: var(--muted); font-size: .95rem; margin-top: 2px; line-height: 1.3; overflow-wrap: anywhere; }
   .info b { color: var(--ink); font-weight: 600; }
+  .mtag { display: inline-block; font-size: .78rem; font-weight: 700; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; }
+  .machline { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 0 2px 8px; color: var(--muted); font-size: .85rem; }
+  .machline b { color: var(--ink); }
+  .mpick { flex-wrap: wrap; }
   .lastupd { color: var(--muted); font-size: .8rem; margin-top: 8px; overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .chip { font-size: .85rem; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); }
@@ -197,7 +201,7 @@ const store = {
 // Remembers where the worker was on the list, per tab (also kept after the app is closed)
 const POS = (() => { try { return JSON.parse(store.get('pos') || '{}'); } catch (e) { return {}; } })();
 const S = {
-  data: null, tests: null, order: [], worker: store.get('worker'), lang: store.get('lang') || 'en',
+  data: null, tests: null, order: [], worker: store.get('worker'), machine: store.get('machine'), lang: store.get('lang') || 'en',
   view: 'home', tab: 'samples', query: '', showDone: false,
   code: null, test: null, step: 1, editing: false, draft: '', modal: null, busy: false
 };
@@ -388,6 +392,16 @@ Object.assign(L.gu, {
   resetQ: (c, l) => `${c} નું ${l} રીસેટ કરવું છે?`,
   resetInfo: 'આ ફક્ત આ ટેસ્ટના W1, W2, W3 અને પરિણામ ભૂંસી નાખશે. પછી આ ટેસ્ટ પગલું 1 થી ફરી શરૂ કરવાનો.',
   cancel: 'રદ કરો', yesReset: 'હા, રીસેટ કરો', resetDone: (c, l) => `${c} ${l} રીસેટ થયું. પગલું 1 થી ફરી શરૂ કરો.`
+});
+Object.assign(L.en, {
+  machAll: 'All machines', machHint: 'Tap to choose your weighing machine',
+  machLine: (m, n) => `Showing samples for ${m} and ALL` + (n ? ` · ${n} for other machines hidden` : ''),
+  machNone: m => `No samples allocated to ${m}.`
+});
+Object.assign(L.gu, {
+  machAll: 'બધા મશીન', machHint: 'તમારું વજન કાંટો (મશીન) પસંદ કરવા ટેપ કરો',
+  machLine: (m, n) => `${m} અને ALL ના સેમ્પલ દેખાય છે` + (n ? ` · બીજા મશીનના ${n} છુપાવ્યા` : ''),
+  machNone: m => `${m} માટે કોઈ સેમ્પલ ફાળવેલ નથી.`
 });
 Object.assign(L.en, { noCodes: 'No sample codes yet. The supervisor adds them with ⚙ Setup.' });
 Object.assign(L.gu, { noCodes: 'હજી કોઈ સેમ્પલ કોડ નથી. સુપરવાઇઝર ⚙ સેટઅપમાંથી ઉમેરશે.' });
@@ -676,9 +690,23 @@ function fmtDate(d) {
   return m ? `${+m[3]} ${MON[+m[2] - 1]} ${m[1]}` : (d || '');
 }
 function nameOf(code) { return NAMES[code] || NAMES[String(code).toUpperCase()] || null; }
+/* ---------- weighing machine (W1–W4), chosen per phone in Setup ----------
+   The Machine column of the Name Tags sheet comes through names.json as e.g. "W2", "ALL" or "W1, W3".
+   A sample shows on this phone if no machine is chosen, its cell is blank, it says ALL, or it names this machine. */
+const MACHINES = ['W1', 'W2', 'W3', 'W4'];
+function machinesOf(code) {
+  const n = nameOf(code);
+  return String((n && n.machine) || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+}
+function forMachine(code) {
+  if (!S.machine) return true;
+  const m = machinesOf(code);
+  return !m.length || m.includes('ALL') || m.includes(S.machine);
+}
 function infoHTML(code, cls = 'info') {
   const n = nameOf(code); if (!n) return '';
-  const bits = [n.name ? `<b>${esc(n.name)}</b>` : '', n.date ? esc(fmtDate(n.date)) : '', n.supplier ? esc(n.supplier) : ''].filter(Boolean);
+  const bits = [n.name ? `<b>${esc(n.name)}</b>` : '', n.date ? esc(fmtDate(n.date)) : '', n.supplier ? esc(n.supplier) : '',
+    n.machine ? `<span class="mtag">${esc(String(n.machine).toUpperCase())}</span>` : ''].filter(Boolean);
   return bits.length ? `<div class="${cls}">${bits.join(' · ')}</div>` : '';
 }
 async function loadNames(force) {
@@ -900,8 +928,8 @@ function searchText(code) { const n = nameOf(code); return n ? [n.name, n.suppli
 // The samples the list shows, in its order (search and "show completed" apply)
 function listed() {
   const q = S.query.trim().toLowerCase();
-  return S.data.samples.filter(s =>
-    (S.showDone || s.status !== 'Complete') && (!q || s.code.toLowerCase().includes(q) || searchText(s.code).includes(q)));
+  return S.data.samples.filter(s => forMachine(s.code) &&
+    ((S.showDone || s.status !== 'Complete') && (!q || s.code.toLowerCase().includes(q) || searchText(s.code).includes(q))));
 }
 // Small line on each card: the latest change to the sample (a weight, reset or approval), from data the app already has
 function lastHTML(s) {
@@ -919,7 +947,8 @@ function listHTML() {
   const q = S.query.trim().toLowerCase();
   const list = listed();
   if (!list.length)
-    return `<div class="empty">${esc(q ? T().noMatch(S.query) : S.data.samples.length ? T().allDone : T().noCodes)}</div>`;
+    return `<div class="empty">${esc(q ? T().noMatch(S.query) : !S.data.samples.length ? T().noCodes
+      : S.machine && !S.data.samples.some(s => forMachine(s.code)) ? T().machNone(S.machine) : T().allDone)}</div>`;
   return list.map(s => `
     <button class="sample${flagsOf(s).length ? ' flag' : ''}" data-act="open-sample" data-code="${esc(s.code)}">
       <div class="code"><span>${esc(s.code)}</span>${approvalOf(s) ? `<span class="apprtick" role="img" aria-label="${esc(T().apprTick)}" title="${esc(T().apprTick)}">✓</span>` : ''}</div>${infoHTML(s.code)}
@@ -929,13 +958,14 @@ function listHTML() {
 
 function renderHome() {
   const t = T(), oven = [];
-  S.data.samples.forEach(s => S.order.forEach(k => {
+  S.data.samples.filter(s => forMachine(s.code)).forEach(s => S.order.forEach(k => {
     const st = s.tests[k];
     if (st.required && st.done === 2) oven.push({ code: s.code, k });
   }));
   let body;
   if (S.tab === 'samples') {
-    body = `<input class="field" type="search" placeholder="${esc(t.find)}" value="${esc(S.query)}"
+    const hidden = S.machine ? S.data.samples.filter(s => !forMachine(s.code) && (S.showDone || s.status !== 'Complete')).length : 0;
+    body = `<button class="machline" data-act="setup">⚖ ${S.machine ? `<b>${esc(S.machine)}</b> · ${esc(t.machLine(S.machine, hidden))}` : `<b>${esc(t.machAll)}</b> · ${esc(t.machHint)}`}</button><input class="field" type="search" placeholder="${esc(t.find)}" value="${esc(S.query)}"
               data-input="query" autocomplete="off" aria-label="${esc(t.find)}">
       <div class="list" id="list">${listHTML()}</div>
       <button class="link center" data-act="toggle-done">${esc(S.showDone ? t.hideDone : t.showDone)}</button>`;
@@ -1114,9 +1144,15 @@ function renderSetup() {
   return `<div style="display:flex;justify-content:space-between;align-items:center">
       <button class="back" data-act="setup-done">← Back</button>${langBtn()}</div>
     <h2 class="title">Setup</h2>
-    <p class="sub">For the supervisor. Workers don't need this screen.</p>
+    <p class="sub">Workers: choose your weighing machine here. The rest is for the supervisor.</p>
 
     <div class="prev" style="margin-top:0">
+      <div class="row" style="display:block"><b>Weighing machine on this phone</b>
+        <p class="sub" style="margin:4px 0 8px">The sample list then shows only the samples given to this machine in the Machine column of the sheet, plus samples marked ALL or left blank.</p>
+        <div class="toggle mpick">${['', ...MACHINES].map(m => `<button aria-pressed="${(S.machine || '') === m}" data-act="machine" data-val="${m}">${m || 'All'}</button>`).join('')}</div></div>
+    </div>
+
+    <div class="prev">
       <div class="row"><span><b>Storage</b><br>github.com/${esc(GH.owner)}/${esc(GH.repo)} → ${esc(GH.path)}</span>
         <span style="font-weight:700;color:${linked && !bad ? 'var(--ok)' : 'var(--err)'}">${linked ? (bad ? 'Key refused' : 'Connected') : 'Not set up'}</span></div>
       <div class="row" style="display:block">
@@ -1630,6 +1666,7 @@ document.addEventListener('click', e => {
     }
     case 'refresh': load(true); break;
     case 'setup': S.view = 'setup'; render(); break;
+    case 'machine': S.machine = el.dataset.val || ''; store.set('machine', S.machine); render(); toast(S.machine ? `This phone is now ${S.machine}.` : 'Showing samples for all machines.', true); break;
     case 'setup-done': S.view = S.worker ? 'home' : 'name'; if (S.data) render(); else renderNotReady(); load(false); break;
     case 'save-key': saveKey(); break;
     case 'forget-key': if (confirmTap(el)) { KEY = ''; store.set('ghkey', ''); S.syncErr = null; render(); showSync(); } break;

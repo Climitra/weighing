@@ -106,6 +106,18 @@ let KEY = store.get('ghkey');                      // shared with the app on the
 
 const V = { range: store.get('dash-range') || 'today', group: store.get('dash-group') || 'equip', stage: store.get('dash-stage') || 'both', hidden: new Set(), view: 'chart' };
 let RAW = null, BLOG = null, LOADED = 0, ERR = null;
+/* weighing machine (W1–W4) of each sample, from names.json (the Machine column of the sheet).
+   Shared with the weighing app on the same site, and read again at most every 10 min (the sheet syncs every 15). */
+const MACHINES = ['W1', 'W2', 'W3', 'W4'];
+let NAMES = {}, namesAt = 0;
+try { NAMES = JSON.parse(store.get('names') || '{}').names || {}; } catch (e) { NAMES = {}; }
+const machinesOf = code => { const n = NAMES[code] || NAMES[String(code).toUpperCase()];
+  return String((n && n.machine) || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean); };
+// machine groups a sample belongs to: each W1–W4 it names, else ALL, else not given to a machine
+const machineKeys = code => { const m = machinesOf(code), w = MACHINES.filter(x => m.includes(x));
+  return w.length ? w : [m.includes('ALL') ? 'ALL' : 'none']; };
+const MACH_NAME = { ALL: 'ALL (any machine)', none: 'No machine in the sheet' };
+const machLabel = k => MACH_NAME[k] || 'Machine ' + k;
 const root = document.getElementById('root'), tip = document.getElementById('tip');
 
 /* ---------- data ---------- */
@@ -119,7 +131,12 @@ async function fetchLog(path = GH.path) {
 }
 async function load() {
   if (!KEY) { renderKey(); return; }
-  try { [RAW, BLOG] = await Promise.all([fetchLog(), fetchLog('timerlog.json')]); ERR = null; LOADED = Date.now(); }
+  const names = V.group === 'machine' && Date.now() - namesAt > 10 * 6e4;
+  try {
+    let nf; [RAW, BLOG, nf] = await Promise.all([fetchLog(), fetchLog('timerlog.json'), names ? fetchLog('names.json').catch(() => null) : null]);
+    if (nf && nf.names) { NAMES = nf.names; namesAt = Date.now(); store.set('names', JSON.stringify(nf)); }
+    ERR = null; LOADED = Date.now();
+  }
   catch (e) { ERR = e.message === 'Failed to fetch' ? 'No internet connection.' : e.message; }
   render();
 }
@@ -198,7 +215,8 @@ function render() {
       <div class="seg" role="group" aria-label="Time range">${rangeBtn('today', 'Today')}${rangeBtn('yesterday', 'Yesterday')}${rangeBtn('7d', 'Last 7 days')}${rangeBtn('all', 'All')}</div>
       ${TESTS.map(t => `<button class="chip" data-test="${esc(t.key)}" aria-pressed="${!V.hidden.has(t.key)}" style="--c:${t.color}"><i></i>${esc(t.key)}</button>`).join('')}
       <select id="group" aria-label="Group rows"><option value="equip"${V.group === 'equip' ? ' selected' : ''}>Group by oven / furnace</option>
-        <option value="sample"${V.group === 'sample' ? ' selected' : ''}>Group by sample</option></select>
+        <option value="sample"${V.group === 'sample' ? ' selected' : ''}>Group by sample</option>
+        <option value="machine"${V.group === 'machine' ? ' selected' : ''}>Group by weighing machine</option></select>
       <div class="seg" role="group" aria-label="Stage"><button data-stage="both" aria-pressed="${V.stage === 'both'}">Both stages</button><button data-stage="weigh" aria-pressed="${V.stage === 'weigh'}">W1 → W2</button><button data-stage="heat" aria-pressed="${V.stage === 'heat'}">W2 → W3</button></div>
       <div class="seg" role="group" aria-label="View"><button data-view="chart" aria-pressed="${V.view === 'chart'}">Chart</button><button data-view="table" aria-pressed="${V.view === 'table'}">Table</button></div>
     </div>
@@ -212,7 +230,7 @@ function render() {
         `<div class="tile"><b>${dur(heat(t.key))}</b><span>typical ${esc(t.key)} time in ${t.eq.toLowerCase()} ${timer ? '(timer start → taken out)' : '(W2→W3)'}</span></div>`).join('')}
     </div>
     ${!list.length ? `<div class="card"><div class="empty">No weighing in this time range${RAW && !Object.keys(RAW).length ? ' yet. Timestamps start from the first weight saved after the app update' : ''}.</div></div>`
-      : (V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)) + weighHTML(list)}
+      : (V.group === 'machine' ? machineHTML(list) : '') + (V.view === 'table' ? tableHTML(list) : chartHTML(list, a, b, now)) + weighHTML(list)}
     ${batchesHTML(a, b, now)}`;
   wire();
 }
@@ -234,6 +252,8 @@ function chartHTML(list, a, b, now) {
   const sorted = list.slice().sort((x, y) => (x.w2 ? x.w2.t : x.start) - (y.w2 ? y.w2.t : y.start));
   const groups = V.group === 'equip'
     ? EQUIP.map(e => ({ name: e === 'Oven' ? 'Oven: Moisture, Total Moisture' : 'Furnace: VM, Ash', eq: e, rows: sorted.filter(j => j.test.eq === e) }))
+    : V.group === 'machine'
+    ? [...MACHINES, 'ALL', 'none'].map(k => ({ name: machLabel(k), rows: sorted.filter(j => machineKeys(j.code).includes(k)) }))
     : [...new Set(list.map(j => j.code))].sort((x, y) => codeNum(x) - codeNum(y) || x.localeCompare(y))
         .map(c => ({ name: c, rows: TESTS.map(t => list.find(j => j.code === c && j.test.key === t.key)).filter(Boolean) }));
 
@@ -278,7 +298,7 @@ function chartHTML(list, a, b, now) {
     y += GH_;
     gr.rows.forEach(j => {
       const yc = y + RH / 2;
-      const lbl = V.group === 'equip' ? `${j.code} · ${j.test.short}` : j.test.key;
+      const lbl = V.group === 'sample' ? j.test.key : `${j.code} · ${j.test.short}`;
       const xs = j.w1 ? x(j.w1.t) : null, x2 = j.w2 ? x(j.w2.t) : null, xe = x(j.end);
       let marks = '';
       const showW = V.stage !== 'heat', showH = V.stage !== 'weigh';
@@ -355,6 +375,34 @@ function chartHTML(list, a, b, now) {
       <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
         <rect width="2" height="6" fill="var(--surface)" opacity=".7"/></pattern></defs>
       <g class="axis">${grid}</g>${g}${nowLine}</svg></div></div>`;
+}
+
+/* ---------- per weighing machine (job-wise): what each machine weighed in this range ---------- */
+function machineHTML(list) {
+  const keys = [...MACHINES, 'ALL', 'none'];
+  const SB = sampleBatches();
+  const rows = keys.map(k => {
+    const js = list.filter(j => machineKeys(j.code).includes(k)); if (!js.length && !MACHINES.includes(k)) return '';
+    const n = f => js.filter(f).length;
+    const wt = js.filter(j => j.w1 && j.w2 && j.w2.t >= j.w1.t).map(j => j.w2.t - j.w1.t);
+    const by = [...new Set(js.map(j => (j.w2 || j.w1 || j.w3).by).filter(Boolean))].sort();
+    // W2 saved, no W3 yet: split by the Lab Timer batch (without timer data it all counts as inside)
+    const open = js.filter(j => j.w2 && !j.w3).map(j => stagesOf(j, SB)), timer = hasTimer();
+    const waiting = timer ? open.filter(st => !st).length : 0, inside = open.filter(st => timer ? st && st.running : true).length;
+    const outW3 = open.filter(st => st && !st.running).length;
+    return `<tr><td><b>${esc(machLabel(k))}</b></td><td>${new Set(js.map(j => j.code)).size}</td>
+      ${TESTS.filter(t => !V.hidden.has(t.key)).map(t => { const c = js.filter(j => j.test.key === t.key).length;
+        return `<td>${c || '<span style="color:var(--muted)">–</span>'}</td>`; }).join('')}
+      <td>${n(j => j.w1 && !j.w2) || '–'}</td><td>${waiting || '–'}</td><td>${inside || '–'}</td><td>${outW3 || '–'}</td><td><b>${n(j => j.w2 && j.w3)}</b></td>
+      <td>${wt.length ? fmtMin(median(wt)) : '–'}</td><td>${esc(by.join(', ')) || '–'}</td></tr>`;
+  }).join('');
+  const noNames = !Object.values(NAMES).some(x => x && x.machine);
+  return `<div class="card"><h2>By weighing machine</h2>
+    <p class="sub">Tests in this range for each machine, from the Machine column of the sample sheet. A sample given to two machines counts under both.${noNames ? ' <b>No machine is filled in the sheet yet</b>, so everything is under “No machine in the sheet”.' : ''}</p>
+    <div class="scroll"><table class="list"><thead><tr><th>Machine</th><th>Samples</th>
+      ${TESTS.filter(t => !V.hidden.has(t.key)).map(t => `<th><i class="sw" style="width:10px;background:${t.color};margin-right:6px"></i>${esc(t.short)}</th>`).join('')}
+      <th>W1 only</th><th>Waiting to go in</th><th>In oven / furnace</th><th>Out, W3 pending</th><th>Finished (W3)</th><th>Typical W1 → W2</th><th>Weighed by</th></tr></thead>
+      <tbody>${rows}</tbody></table></div></div>`;
 }
 
 /* ---------- weighing time: W1 (empty) → W2 (with sample) ----------
@@ -589,11 +637,12 @@ function stepsFor(list, eq, t0, t1, now) {
 
 function tableHTML(list) {
   const SBT = sampleBatches();
-  const rows = list.slice().sort((a, b) => b.start - a.start);
+  const mOrd = c => { const k = machineKeys(c)[0], i = MACHINES.indexOf(k); return i >= 0 ? i : (k === 'ALL' ? 4 : 5); };
+  const rows = list.slice().sort((a, b) => (V.group === 'machine' ? mOrd(a.code) - mOrd(b.code) : 0) || b.start - a.start);
   const cell = w => w ? `${when(w.t)} <span style="color:var(--muted)">${esc(w.by)}</span>` : '–';
-  return `<div class="card"><h2>All tests in this range</h2><p class="sub">Newest first.</p><div class="scroll"><table class="list">
-    <thead><tr><th>Sample</th><th>Test</th><th>W1 (empty)</th><th>W2 (with sample)</th><th>W3 (after heating)</th><th>W1 → W2</th><th>W2 → in</th><th>In oven / furnace</th><th>Out → W3</th></tr></thead>
-    <tbody>${rows.map(j => `<tr><td><b>${esc(j.code)}</b></td><td><i class="sw" style="width:10px;background:${j.test.color};margin-right:6px"></i>${esc(j.test.key)}</td>
+  return `<div class="card"><h2>All tests in this range</h2><p class="sub">${V.group === 'machine' ? 'By machine, then newest first.' : 'Newest first.'}</p><div class="scroll"><table class="list">
+    <thead><tr><th>Sample</th>${V.group === 'machine' ? '<th>Machine</th>' : ''}<th>Test</th><th>W1 (empty)</th><th>W2 (with sample)</th><th>W3 (after heating)</th><th>W1 → W2</th><th>W2 → in</th><th>In oven / furnace</th><th>Out → W3</th></tr></thead>
+    <tbody>${rows.map(j => `<tr><td><b>${esc(j.code)}</b></td>${V.group === 'machine' ? `<td>${esc(machinesOf(j.code).join(', ') || '–')}</td>` : ''}<td><i class="sw" style="width:10px;background:${j.test.color};margin-right:6px"></i>${esc(j.test.key)}</td>
       <td>${cell(j.w1)}</td><td>${cell(j.w2)}</td><td>${cell(j.w3)}</td>
       <td>${j.w1 && j.w2 ? dur(j.w2.t - j.w1.t) : '–'}</td>
       ${(st => st ? `<td>${dur(st.wait)}</td><td><b>${dur(st.heat)}</b>${st.running ? ' so far' : ''} <span style="color:var(--muted)">${esc(st.q.section)}</span></td>
@@ -607,7 +656,7 @@ function showTip(el, cx, cy) {
   const j = jobs().find(q => q.code === code && q.test.key === key); if (!j) return;
   const st = stagesOf(j, sampleBatches());
   const r = (l, w) => `<tr><td>${l}</td><td>${w ? `<b>${when(w.t)}</b> · ${esc(w.by)}` : '<span style="color:var(--muted)">not yet</span>'}</td></tr>`;
-  tip.innerHTML = `<h3><i class="sw" style="width:10px;background:${j.test.color}"></i>${esc(code)} · ${esc(key)}</h3>
+  tip.innerHTML = `<h3><i class="sw" style="width:10px;background:${j.test.color}"></i>${esc(code)} · ${esc(key)}${machinesOf(code).length ? ` <span style="color:var(--muted);font-weight:400">· ${esc(machinesOf(code).join(', '))}</span>` : ''}</h3>
     <table>${r('W1 empty', j.w1)}${r('W2 with sample', j.w2)}${r('W3 after heating', j.w3)}</table>
     <div class="dur">${j.w1 && j.w2 ? `W1 → W2 (weighing): <b>${dur(j.w2.t - j.w1.t)}</b><br>` : ''}
       ${st ? `W2 → into ${esc(st.q.section)}: <b>${dur(st.wait)}</b> (started ${hm(st.start)})<br>
@@ -628,7 +677,8 @@ function wire() {
   root.querySelectorAll('[data-stage]').forEach(b => b.onclick = () => { V.stage = b.dataset.stage; store.set('dash-stage', V.stage); render(); });
   root.querySelectorAll('.chip[data-test]').forEach(b => b.onclick = () => {
     const k = b.dataset.test; V.hidden.has(k) ? V.hidden.delete(k) : V.hidden.add(k); render(); });
-  const g = document.getElementById('group'); if (g) g.onchange = () => { V.group = g.value; store.set('dash-group', V.group); render(); };
+  const g = document.getElementById('group'); if (g) g.onchange = () => { V.group = g.value; store.set('dash-group', V.group);
+    if (V.group === 'machine' && Date.now() - namesAt > 10 * 6e4) load(); else render(); };
   const r = document.getElementById('refresh'); if (r) r.onclick = load;
   root.querySelectorAll('.hit[data-b]').forEach(el => {
     el.addEventListener('mousemove', e => showBatchTip(el, e.clientX, e.clientY));

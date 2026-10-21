@@ -238,12 +238,12 @@ const L = {
     nextW2: 'Next: add sample and weigh (W2)',
     done: 'Done', doneP: p => `Done: ${p}`,
     vmWait: 'Shows after Moisture is done',
-    flagState: (p, lim) => `⚠ High: ${p} (limit ${lim} %)`,
+    flagState: (p, lim) => `⚠ High: ${p} (limit ${lim})`,
     flagNeg: p => `⚠ Negative: ${p} (not possible, check the weights)`,
     flagLow: (p, lim) => `⚠ Too low: ${p}. Lower limit is ${lim} %. Check the weights.`,
     flagSavedLow: (n, p, lim) => `⚠ ${n} is low: ${p}. Lower limit is ${lim} %. Tell the supervisor.`,
     flagNote: (names) => `⚠ Out of range: ${names}`,
-    flagSaved: (n, p, lim) => `⚠ ${n} is high: ${p}. Limit is ${lim} %. Tell the supervisor.`,
+    flagSaved: (n, p, lim) => `⚠ ${n} is high: ${p}. Limit is ${lim}. Tell the supervisor.`,
     flagSavedNeg: (n, p) => `⚠ ${n} is negative: ${p}. Check the weights and tell the supervisor.`,
     apprNeed: 'Not in the results file until approved.',
     apprBtn: 'Approve result',
@@ -323,12 +323,12 @@ const L = {
     nextW2: 'હવે: સેમ્પલ નાખીને વજન કરો (W2)',
     done: 'પૂરું', doneP: p => `પૂરું: ${p}`,
     vmWait: 'ભેજ પૂરું થયા પછી દેખાશે',
-    flagState: (p, lim) => `⚠ વધારે: ${p} (મર્યાદા ${lim} %)`,
+    flagState: (p, lim) => `⚠ વધારે: ${p} (મર્યાદા ${lim})`,
     flagNeg: p => `⚠ નેગેટિવ: ${p} (શક્ય નથી, વજન તપાસો)`,
     flagLow: (p, lim) => `⚠ ખૂબ ઓછું: ${p}. નીચી મર્યાદા ${lim} % છે. વજન તપાસો.`,
     flagSavedLow: (n, p, lim) => `⚠ ${n} ઓછું છે: ${p}. નીચી મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
     flagNote: (names) => `⚠ મર્યાદા બહાર: ${names}`,
-    flagSaved: (n, p, lim) => `⚠ ${n} વધારે છે: ${p}. મર્યાદા ${lim} % છે. સુપરવાઇઝરને જણાવો.`,
+    flagSaved: (n, p, lim) => `⚠ ${n} વધારે છે: ${p}. મર્યાદા ${lim} છે. સુપરવાઇઝરને જણાવો.`,
     flagSavedNeg: (n, p) => `⚠ ${n} નેગેટિવ છે: ${p}. વજન તપાસો અને સુપરવાઇઝરને જણાવો.`,
     apprNeed: 'મંજૂર થાય ત્યાં સુધી પરિણામ ફાઇલમાં નહીં જાય.',
     apprBtn: 'પરિણામ મંજૂર કરો',
@@ -952,6 +952,9 @@ function recompute(s) {
         t.pct = isNum(mc) ? r2((w[1] - w[2]) / (w[1] - w[0]) * 100 - mc) : null;
       } else t.pct = r2((w[1] - w[2]) / (w[1] - w[0]) * 100);
     }
+    // Dry basis for VM and Ash, which their upper limits use
+    const mcDb = s.tests.MC && s.tests.MC.pct;
+    t.db = (k === 'VM' || k === 'ASH') && isNum(t.pct) && isNum(mcDb) && mcDb < 100 ? r2(t.pct / (100 - mcDb) * 100) : null;
     t.done = isNum(t.pct) ? 3 : done;
     t.required = !S.tests[k].optional || s.tmRequired;
   });
@@ -1048,11 +1051,16 @@ function parseW(str) {
   return v > 0 ? v : null;
 }
 // Results above these limits (%), or below zero (not possible), are flagged red.
-const FLAG = { MC: 17.5, VM: 17.5, ASH: 17.5, TM: 60 }, FLAG_LOW = { MC: 1.5, VM: 5, ASH: 1.5, TM: 1.5 };   // keep in step with LIMITS/LOWER in weighing-data compute_results.py
+// Upper limits: VM and Ash on dry basis (FLAG_DB), the others as received. Lower limits are as received.
+// Keep in step with LIMITS/DB_LIMITS/LOWER in weighing-data compute_results.py
+const FLAG = { MC: 17.5, VM: 17.5, ASH: 12, TM: 60 }, FLAG_DB = { VM: true, ASH: true }, FLAG_LOW = { MC: 1.5, VM: 5, ASH: 1.5, TM: 1.5 };
 function isNeg(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct < 0; }
 function isLow(k, st) { return FLAG[k] != null && st && isNum(st.pct) && st.pct >= 0 && st.pct < FLAG_LOW[k]; }
-function isFlag(k, st) { return FLAG[k] != null && st && isNum(st.pct) && (st.pct > FLAG[k] || st.pct < FLAG_LOW[k]); }
-function flagText(k, st) { return isNeg(k, st) ? T().flagNeg(pctLine(k, st)) : isLow(k, st) ? T().flagLow(pctLine(k, st), FLAG_LOW[k]) : T().flagState(pctLine(k, st), FLAG[k]); }
+function isHigh(k, st) { if (!st || FLAG[k] == null) return false; const v = FLAG_DB[k] ? st.db : st.pct; return isNum(v) && v > FLAG[k]; }
+function isFlag(k, st) { return isHigh(k, st) || isLow(k, st) || isNeg(k, st); }
+function highLine(k, st) { return FLAG_DB[k] && isNum(st.db) ? `${pctLine(k, st)} · db ${st.db.toFixed(2)} %` : pctLine(k, st); }
+function limLine(k) { return FLAG_DB[k] ? `${FLAG[k]} % db` : `${FLAG[k]} %`; }
+function flagText(k, st) { return isNeg(k, st) ? T().flagNeg(pctLine(k, st)) : isLow(k, st) ? T().flagLow(pctLine(k, st), FLAG_LOW[k]) : T().flagState(highLine(k, st), limLine(k)); }
 function flagsOf(s) { return ORDER.filter(k => s.tests[k].required && isFlag(k, s.tests[k])); }
 function pctLine(k, st) {
   if (isNum(st.pct)) return `${st.pct.toFixed(2)} %`;
@@ -1351,7 +1359,7 @@ function renderSetup() {
 
     <div class="prev">
       <div class="row" style="display:block"><b>Results</b>
-        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture, VM and Ash above 17.5 %, Total moisture above 60 %, VM below 5 %, the others below 1.5 %, or negative are marked red.</p>
+        <p class="sub" style="margin:4px 0 8px">Download every sample, in the same columns as the old logging sheet. Moisture above 17.5 %, VM (db) above 17.5 %, Ash (db) above 12 %, Total moisture above 60 %, VM below 5 %, the others below 1.5 %, or negative are marked red.</p>
         <button class="primary" data-act="export-xlsx" style="width:100%">⤓ Download results (Excel, red = outside limits)</button>
         <button class="secondary" data-act="export" style="width:100%;margin-top:8px">⤓ Download as .csv (no colours, see Flag column)</button></div>
       <div class="row" style="display:block"><b>Results files on GitHub</b>
@@ -1459,7 +1467,7 @@ function resultsTable() {
       ...ORDER.flatMap(k => { const t = s.tests[k];
         return [...t.w.map(v => ({ v: isNum(v) ? v : '' })), { v: isNum(t.pct) ? t.pct : '', flag: isFlag(k, t) }]; }),
       { v: s.tmRequired ? 'Y' : '' }, { v: s.status }, { v: s.last || '' },
-      { v: fl.map(k => isNeg(k, s.tests[k]) ? `${TESTS[k].label} negative` : isLow(k, s.tests[k]) ? `${TESTS[k].label} < ${FLAG_LOW[k]}%` : `${TESTS[k].label} > ${FLAG[k]}%`).join('; '), flag: fl.length > 0 }];
+      { v: fl.map(k => isNeg(k, s.tests[k]) ? `${TESTS[k].label} negative` : isLow(k, s.tests[k]) ? `${TESTS[k].label} < ${FLAG_LOW[k]}%` : `${TESTS[k].label} > ${limLine(k)}`).join('; '), flag: fl.length > 0 }];
   });
   return { groups, head2, rows };
 }
@@ -1631,7 +1639,7 @@ function askPhoto(m) { return (m.kind === 's3' || m.kind === 'corrected') && nee
 function flagMsg(m) {
   if (m.kind !== 's3' && m.kind !== 'corrected') return '';
   const st = sample(S.code) && sample(S.code).tests[S.test];
-  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(isNeg(S.test, st) ? T().flagSavedNeg(lbl(S.test), pctLine(S.test, st)) : isLow(S.test, st) ? T().flagSavedLow(lbl(S.test), pctLine(S.test, st), FLAG_LOW[S.test]) : T().flagSaved(lbl(S.test), pctLine(S.test, st), FLAG[S.test]))}</p>` : '';
+  return isFlag(S.test, st) ? `<p class="flagnote" style="font-size:1.05rem">${esc(isNeg(S.test, st) ? T().flagSavedNeg(lbl(S.test), pctLine(S.test, st)) : isLow(S.test, st) ? T().flagSavedLow(lbl(S.test), pctLine(S.test, st), FLAG_LOW[S.test]) : T().flagSaved(lbl(S.test), highLine(S.test, st), limLine(S.test)))}</p>` : '';
 }
 // Built at display time so it follows the language switch
 function savedMsg(m) {

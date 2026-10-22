@@ -152,7 +152,7 @@ const L = {
     waitingTitle: 'Waiting to go in', waitingSub: 'W2 saved, not in an oven or furnace yet. Grouped by who prepared them (saved W2), oldest first.',
     outTitle: 'Taken out: weigh W3', outSub: 'These leave the list when W3 is saved in the weighing app.',
     prepBy: w => `Prepared by ${w}`, noPrep: 'Name not recorded', onlyThese: n => `Tick only these ${n}`,
-    nothingWaiting: 'Nothing waiting.', nothingOut: 'Nothing waiting for W3.', next: s => `next: ${s}`, full: 'all sections busy',
+    nothingWaiting: 'Nothing waiting.', nothingOut: 'Nothing waiting for W3.', next: s => `next: ${s}`, allBusy: 'all sections busy',
     startIn: s => `Start ${s}`, chooseTest: 'Which test is going in?', timeLbl: 'Timer', h: 'h', m: 'min',
     suggested: m => `Suggested: ${fmtDur(m)}`, resetSugg: 'Back to suggested time',
     goesIn: (n, cap) => `Going in: ${n} of max ${cap}`, extra: n => `${n} more will stay waiting for the next batch.`,
@@ -178,7 +178,7 @@ const L = {
     waitingTitle: 'અંદર મૂકવાના બાકી', waitingSub: 'W2 સેવ થયું છે, હજી ઓવન/ફર્નેસમાં નથી. કોણે તૈયાર કર્યા (W2 સેવ કર્યું) તે મુજબ, જૂના પહેલા.',
     outTitle: 'બહાર કાઢ્યા: W3 નું વજન કરો', outSub: 'વજન એપમાં W3 સેવ થતાં યાદીમાંથી નીકળી જશે.',
     prepBy: w => `તૈયાર કરનાર: ${w}`, noPrep: 'નામ નોંધાયું નથી', onlyThese: n => `ફક્ત આ ${n} પસંદ કરો`,
-    nothingWaiting: 'કંઈ બાકી નથી.', nothingOut: 'W3 માટે કંઈ બાકી નથી.', next: s => `હવે: ${s}`, full: 'બધા વિભાગ ચાલુ છે',
+    nothingWaiting: 'કંઈ બાકી નથી.', nothingOut: 'W3 માટે કંઈ બાકી નથી.', next: s => `હવે: ${s}`, allBusy: 'બધા વિભાગ ચાલુ છે',
     startIn: s => `${s} શરૂ કરો`, chooseTest: 'કયો ટેસ્ટ અંદર જાય છે?', timeLbl: 'ટાઇમર', h: 'કલાક', m: 'મિનિટ',
     suggested: m => `સૂચવેલ: ${fmtDur(m)}`, resetSugg: 'સૂચવેલ સમય પર પાછા',
     goesIn: (n, cap) => `અંદર જશે: ${n} (વધુમાં વધુ ${cap})`, extra: n => `${n} બીજા આગલા બેચ માટે બાકી રહેશે.`,
@@ -446,7 +446,7 @@ function tileHTML(sec) {
 
 function nextFree(k) {
   const s = SECTIONS.find(sec => sec.tests[k] && !sectionBatch(sec.id));
-  return s ? T().next(secName(s.id)) : T().full;
+  return s ? T().next(secName(s.id)) : T().allBusy;
 }
 function listsHTML() {
   const t = T();

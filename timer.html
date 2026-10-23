@@ -171,6 +171,10 @@ const L = {
     soundOff: 'Alarm sound is off until you tap once.', soundOn: 'Turn on sound',
     keepOpen: 'Keep this screen open. Alarms only ring while the app is on screen.',
     offline: 'Could not reach the lab data. Showing the last list.', updated: t => `data ${t}`,
+    notShared: 'Could not reach the shared timers. Showing the last list. Timers keep running.',
+    busyElsewhere: s => `${s} was just started on another device.`,
+    conflictCancelled: s => `${s} was started on another device at the same moment. This timer was cancelled.`,
+    clockOff: m => `This phone's clock is ${m} min off. Timers will look wrong on other devices. Fix Date & time in the phone settings.`,
     keyTitle: 'Connect this device', keyText: 'Paste the same GitHub key used for the weighing app, or open the setup link with #key=… once.', connect: 'Connect' },
   gu: { other: 'English', title: 'લેબ ટાઇમર', free: 'ખાલી', tapStart: 'શરૂ કરવા ટેપ કરો',
     test: { MC: 'ભેજ', VM: 'VM', ASH: 'રાખ' },
@@ -197,11 +201,20 @@ const L = {
     soundOff: 'એક વાર ટેપ કરો ત્યાં સુધી અલાર્મનો અવાજ બંધ છે.', soundOn: 'અવાજ ચાલુ કરો',
     keepOpen: 'આ સ્ક્રીન ખુલ્લી રાખો. એપ સ્ક્રીન પર હોય ત્યારે જ અલાર્મ વાગે છે.',
     offline: 'લેબ ડેટા મળ્યો નથી. છેલ્લી યાદી દેખાય છે.', updated: t => `ડેટા ${t}`,
+    notShared: 'શેર થયેલા ટાઇમર મળ્યા નથી. છેલ્લી યાદી દેખાય છે. ટાઇમર ચાલુ રહે છે.',
+    busyElsewhere: s => `${s} હમણાં જ બીજા ડિવાઇસ પર શરૂ થયું છે.`,
+    conflictCancelled: s => `${s} એ જ સમયે બીજા ડિવાઇસ પર શરૂ થયું હતું. આ ટાઇમર રદ થયું.`,
+    clockOff: m => `આ ફોનની ઘડિયાળ ${m} મિનિટ ખોટી છે. બીજા ડિવાઇસ પર ટાઇમર ખોટા દેખાશે. ફોનના સેટિંગમાં તારીખ અને સમય સુધારો.`,
     keyTitle: 'આ ડિવાઇસ જોડો', keyText: 'વજન એપ માટે વપરાયેલી GitHub કી અહીં નાખો.', connect: 'જોડો' }
 };
 const S = { lang: store.get('lang') || 'en', file: null, ts: null, loaded: 0, err: null,
             batches: (() => { try { return JSON.parse(store.get('timer-batches')) || []; } catch (e) { return []; } })(),
-            sheet: null, armed: null };
+            sheet: null, armed: null,
+            sharedErr: 0,      // pulls of the shared timers that failed in a row
+            clockOff: 0,       // minutes this phone's clock is off from GitHub's (0 = fine)
+            starting: false };
+// This device's own id: it marks which device started a batch (so a double start can be settled by the device that made the later one)
+const DEV = store.get('timer-dev') || (() => { const v = Math.random().toString(36).slice(2, 8); store.set('timer-dev', v); return v; })();
 L.en.sec = { O1: 'Oven 1', O2: 'Oven 2', F1: 'Furnace 1', F2: 'Furnace 2' };
 L.gu.sec = { O1: 'ઓવન 1', O2: 'ઓવન 2', F1: 'ફર્નેસ 1', F2: 'ફર્નેસ 2' };
 const T = () => L[S.lang] || L.en;
@@ -323,7 +336,9 @@ function logEntry(b) {
     takenOut: b.out ? isoLocal(b.out) : null, stoppedEarly: !!b.early,
     actualMin: b.out ? Math.round((b.out - b.start) / 6000) / 10 : null,
     // started by mistake and reset: kept as a record, but the dashboard leaves it out
-    cancelled: b.cancelled ? isoLocal(b.cancelled) : null };
+    cancelled: b.cancelled ? isoLocal(b.cancelled) : null,
+    // which device started it, and when this entry was last changed (the later change wins when two devices write at once)
+    device: b.device || null, updated: isoLocal(Date.now()) };
 }
 function logBatch(b) { LQ[b.id] = logEntry(b); store.set('timer-logq', JSON.stringify(LQ)); syncLog(); }
 const b64e = str => { const by = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < by.length; i += 0x8000) bin += String.fromCharCode.apply(null, by.subarray(i, i + 0x8000)); return btoa(bin); };
@@ -343,12 +358,12 @@ async function syncLog() {
         file = m.content ? JSON.parse(b64d(m.content)) : await (await fetch(url + '?ref=' + GH.branch, { cache: 'no-store', headers: { ...hdr, Accept: 'application/vnd.github.raw+json' } })).json(); }
       else if (r.status !== 404) throw new Error('GitHub ' + r.status);
       file.batches = file.batches || {};
-      Object.values(batch).forEach(e => { file.batches[e.id] = e; });
+      Object.values(batch).forEach(e => { file.batches[e.id] = mergeEntry(file.batches[e.id], e); });
       const body = { message: `timer: ${Object.values(batch).map(e => `${e.section} ${e.testName}`).join(', ')}`, branch: GH.branch,
                      content: b64e(JSON.stringify(file, null, 1)) };
       if (sha) body.sha = sha;
       const w = await fetch(url, { method: 'PUT', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (w.ok) break;
+      if (w.ok) { await clockCheck(w); break; }
       if ((w.status === 409 || w.status === 422) && attempt < 4) continue;   // saved elsewhere meanwhile: read again
       throw new Error('GitHub ' + w.status);
     }
@@ -359,13 +374,114 @@ async function syncLog() {
   if (Object.keys(LQ).length && !logTimer) syncLog();
 }
 
+/* ---------- shared timers: timerlog.json is read back, so every device shows the same timers ----------
+   The running and the taken-out batches come from timerlog.json. Every action is written to it at once (logBatch), and every
+   device reads it again about every 10 s (the ETag makes a quiet poll free) and whenever the app comes to the front. This
+   device's own changes that GitHub does not have yet (timer-logq) win until they are written. The alarm itself stays local:
+   it rings on every device that has the app open, and stops on all of them once one device snoozes or takes the batch out. */
+const SHARED_MS = 10000, KEEP_OUT_MS = 7 * 86400000, ABANDONED_MS = 12 * 3600000;
+
+// Two devices writing one batch: the later change wins, the events of both are kept, and the two states a batch never leaves
+// (taken out, reset) stick, so a device that has not heard of them yet cannot bring the batch back.
+function mergeEntry(remote, mine) {
+  if (!remote) return mine;
+  const ms = e => (e && e.updated ? Date.parse(e.updated) : 0) || 0;
+  const out = Object.assign({}, ms(mine) >= ms(remote) ? mine : remote);
+  const seen = new Set(), events = [];
+  [].concat(remote.events || [], mine.events || []).forEach(x => { const k = x.type + '|' + x.at; if (!seen.has(k)) { seen.add(k); events.push(x); } });
+  out.events = events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const gone = remote.cancelled ? remote : mine.cancelled ? mine : null;
+  if (gone) out.cancelled = gone.cancelled;
+  const taken = remote.takenOut ? remote : mine.takenOut ? mine : null;
+  if (taken) { out.takenOut = taken.takenOut; out.stoppedEarly = taken.stoppedEarly; out.actualMin = taken.actualMin; }
+  return out;
+}
+
+// a timerlog.json entry as the batch this page works with
+function fromEntry(e) {
+  const events = (e.events || []).map(x => ({ type: x.type, at: Date.parse(x.at), min: x.min }));
+  const sn = events.filter(x => x.type === 'snooze');
+  return { id: e.id, section: e.sectionId, test: e.test, samples: (e.expected || e.samples || []).slice(),
+    start: Date.parse(e.started), end: Date.parse(e.ready), planned: e.plannedMin, device: e.device || null,
+    snoozes: sn.length, snoozeMin: sn.reduce((a, x) => a + (x.min || 0), 0), events,
+    state: e.takenOut ? 'out' : 'run', early: !!e.stoppedEarly, out: e.takenOut ? Date.parse(e.takenOut) : null,
+    cancelled: e.cancelled ? Date.parse(e.cancelled) : null };
+}
+
+function applyShared(remote) {
+  const now = Date.now(), entries = Object.assign({}, remote);
+  Object.keys(LQ).forEach(id => { entries[id] = mergeEntry(remote[id], LQ[id]); });
+  // a batch this device has that GitHub never heard of (made before the timers were shared): hand it over
+  S.batches.forEach(b => { if (!entries[b.id] && !b.cancelled) { logBatch(b); entries[b.id] = LQ[b.id]; } });
+  const list = [];
+  Object.values(entries).forEach(e => {
+    if (!e || !e.id || !e.started || !e.ready || !SECTIONS.some(s => s.id === e.sectionId) || !TS_NAME[e.test]) return;
+    const b = fromEntry(e);
+    if (b.cancelled) return;                                               // reset by mistake: its samples are waiting again
+    if (b.state === 'out' && now - b.out > KEEP_OUT_MS) return;           // long gone
+    if (b.state === 'run' && now - b.end > ABANDONED_MS) return;          // left running and forgotten, not a live timer
+    list.push(b);
+  });
+  // earliest start first; the log keeps a start to the second, so a tie is settled by the id (it begins with the start in ms),
+  // the same way on every device
+  list.sort((a, c) => a.start - c.start || (a.id < c.id ? -1 : a.id > c.id ? 1 : 0));
+  S.batches = list; saveBatches();
+  settleDoubleStarts();
+  tidy();
+  if (S.batches.some(b => b.state === 'run')) keepAwake();
+}
+
+// Two devices started the same section at the same moment: the earlier start keeps it, and the device that made the later one
+// cancels it (so that two devices do not both write it).
+function settleDoubleStarts() {
+  const first = {};
+  S.batches.filter(b => b.state === 'run').forEach(b => {
+    if (!first[b.section]) { first[b.section] = b; return; }
+    if (b.device === DEV) resetBatch(b, T().conflictCancelled(secName(b.section)));
+  });
+}
+
+let LOGTAG = '', pullP = null;
+async function pullShared() {
+  if (!KEY) return;
+  if (pullP) await pullP;
+  const mine = pullP = (async () => {
+    try {
+      const hdr = { Authorization: 'Bearer ' + KEY, Accept: 'application/vnd.github.raw+json' };
+      if (LOGTAG) hdr['If-None-Match'] = LOGTAG;
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      const to = ctl && setTimeout(() => ctl.abort(), 6000);
+      let res;
+      try { res = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.log}?ref=${GH.branch}`,
+        { cache: 'no-store', headers: hdr, signal: ctl ? ctl.signal : undefined }); }
+      finally { if (to) clearTimeout(to); }
+      if (res.status === 304) { S.sharedErr = 0; return; }                  // nothing changed since the last read
+      if (res.status === 404) { LOGTAG = ''; S.sharedErr = 0; applyShared({}); return; }
+      if (!res.ok) throw new Error('GitHub ' + res.status);
+      const tag = res.headers.get('ETag') || '', file = await res.json();
+      LOGTAG = tag; S.sharedErr = 0; applyShared((file && file.batches) || {});
+    } catch (e) { S.sharedErr++; }
+  })();
+  try { await mine; } finally { if (pullP === mine) pullP = null; }
+}
+
+// This phone's clock against GitHub's (the time of our own write): end times are absolute, so a wrong clock shows wrong countdowns elsewhere
+async function clockCheck(w) {
+  try {
+    const j = await w.json(), at = Date.parse(j.commit.committer.date);
+    if (!isFinite(at)) return;
+    const d = at - Date.now();
+    S.clockOff = Math.abs(d) > 90000 ? Math.round(d / 60000) : 0;
+  } catch (e) {}
+}
+
 /* ---------- timers ---------- */
 const sectionBatch = id => S.batches.find(b => b.section === id && b.state !== 'out');
 function startBatch(sec, test, minutes, chosen) {
   const list = chosen ? chosen.slice(0, sec.tests[test]) : waiting(test).slice(0, sec.tests[test]);
   const now = Date.now();
-  S.batches.push({ id: now.toString(36), section: sec.id, test, samples: list, start: now, end: now + minutes * 60000,
-                   planned: minutes, snoozes: 0, snoozeMin: 0, state: 'run', events: [] });
+  S.batches.push({ id: now.toString(36) + DEV.slice(0, 2), section: sec.id, test, samples: list, start: now, end: now + minutes * 60000,
+                   planned: minutes, snoozes: 0, snoozeMin: 0, state: 'run', events: [], device: DEV });
   saveBatches(); unlockAudio(); keepAwake();
   logBatch(S.batches[S.batches.length - 1]);
 }
@@ -385,11 +501,23 @@ function takeOut(b) {
 }
 
 // Started by mistake: drop the batch so its samples are waiting again, and mark it cancelled in the log
-function resetBatch(b) {
+function resetBatch(b, msg) {
   b.cancelled = Date.now(); (b.events = b.events || []).push({ type: 'reset', at: b.cancelled, min: 0 });
   S.batches = S.batches.filter(x => x !== b);
   saveBatches(); logBatch(b); stopSound();
-  toast(T().wasReset(secName(b.section)));
+  toast(msg || T().wasReset(secName(b.section)));
+}
+
+// Starting reads the shared timers once more first: another device may just have started this section, or taken some of these samples
+async function startChecked(sec, test, minutes, chosen) {
+  if (S.starting) return; S.starting = true;
+  try {
+    await pullShared();
+    if (sectionBatch(sec.id)) { S.sheet = null; toast(T().busyElsewhere(secName(sec.id))); render(); return; }
+    const taken = claimed(), list = chosen.filter(c => !taken.has(key(c, test)));
+    if (list.length < chosen.length) toast(T().already(chosen.filter(c => taken.has(key(c, test))).join(', ')));
+    startBatch(sec, test, minutes, list); S.sheet = null; render();
+  } finally { S.starting = false; }
 }
 
 /* ---------- alarm sound, vibration, screen awake ---------- */
@@ -418,7 +546,7 @@ async function keepAwake() {
   try { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } catch (e) {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { if (S.batches.some(b => b.state !== 'out')) keepAwake(); load(); }
+  if (document.visibilityState === 'visible') { if (S.batches.some(b => b.state !== 'out')) keepAwake(); load(); pullShared(); }
 });
 
 /* ---------- screens ---------- */
@@ -547,6 +675,8 @@ function render() {
       <button class="pill" data-act="lang">${esc(t.other)}</button></div></header>
     ${soundBlocked ? `<div class="banner"><span>${esc(t.soundOff)}</span><button data-act="sound">${esc(t.soundOn)}</button></div>` : ''}
     ${S.err ? `<div class="banner" style="background:#fde2e1;color:var(--err);border-color:var(--err)"><span>${esc(t.offline)}</span></div>` : ''}
+    ${S.sharedErr >= 3 ? `<div class="banner" style="background:#fde2e1;color:var(--err);border-color:var(--err)"><span>${esc(t.notShared)}</span></div>` : ''}
+    ${S.clockOff ? `<div class="banner"><span>${esc(t.clockOff(Math.abs(S.clockOff)))}</span></div>` : ''}
     <div class="grid">${SECTIONS.map(tileHTML).join('')}</div>
     ${listsHTML()}
     <p class="meta" style="margin-top:14px">${esc(t.keepOpen)} ${S.loaded ? '· ' + esc(t.updated(hm(S.loaded))) : ''}</p>
@@ -557,7 +687,8 @@ function render() {
 let lastSig = '';
 function tick() {
   const now = Date.now();
-  const sig = S.batches.map(b => b.id + b.state + (b.end <= now)).join() + (S.sheet ? JSON.stringify(S.sheet) : '') + S.armed;
+  // an end time, a snooze or the codes inside changing on another device redraws too; so do the two banners
+  const sig = S.batches.map(b => b.id + b.state + (b.end <= now) + b.end + b.snoozes + b.samples.length).join() + (S.sheet ? JSON.stringify(S.sheet) : '') + S.armed + (S.sharedErr >= 3) + S.clockOff;
   if (sig !== lastSig || document.querySelector('.alarm')) {
     if (!document.activeElement || !['hh', 'mm', 'key', 'newcode'].includes(document.activeElement.id)) { lastSig = sig; render(); return; }
   }
@@ -607,7 +738,7 @@ document.addEventListener('click', e => {
   unlockAudio();
   const sh = S.sheet;
   switch (el.dataset.act) {
-    case 'savekey': { const v = document.getElementById('key').value.trim(); if (v) { KEY = v; store.set('ghkey', v); load(); } break; }
+    case 'savekey': { const v = document.getElementById('key').value.trim(); if (v) { KEY = v; store.set('ghkey', v); load(); pullShared(); } break; }
     case 'lang': S.lang = S.lang === 'en' ? 'gu' : 'en'; store.set('lang', S.lang); render(); break;
     case 'sound': unlockAudio(); setTimeout(render, 200); break;
     case 'open': {
@@ -651,7 +782,7 @@ document.addEventListener('click', e => {
     case 'sugg': sh.min = DEFAULT_MIN[sh.test]; render(); break;
     case 'start': {
       sh.min = readTime(); if (sh.min < 1) return;
-      startBatch(SECTIONS.find(s => s.id === sh.sec), sh.test, sh.min, sh.sel); S.sheet = null; render(); break;
+      startChecked(SECTIONS.find(s => s.id === sh.sec), sh.test, sh.min, sh.sel.slice()); break;
     }
     case 'add': { const b = sectionBatch(sh.sec); if (b) addTime(b, +el.dataset.min); render(); break; }
     case 'stop-early': {
@@ -680,10 +811,11 @@ document.addEventListener('keydown', e => {
   try { const c = JSON.parse(store.get('timer-cache')); if (c) { S.file = c.f; S.ts = c.t; S.loaded = c.at; } } catch (e) {}
 })();
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
-render(); load(); setTimeout(syncLog, 2000);
+render(); load(); pullShared(); setTimeout(syncLog, 2000);
 if (S.batches.some(b => b.state !== 'out')) keepAwake();
 setInterval(tick, 1000);
 setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000);
+setInterval(() => { if (document.visibilityState === 'visible') pullShared(); }, SHARED_MS);
 </script>
 </body>
 </html>
